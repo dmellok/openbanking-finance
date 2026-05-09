@@ -192,6 +192,66 @@ class BudgetIn(BaseModel):
     currency: str = "AUD"
 
 
+class CalendarPoint(BaseModel):
+    date: date
+    total: DecimalStr
+
+
+class TreemapNode(BaseModel):
+    name: str
+    value: DecimalStr
+    children: list[TreemapNode] = []
+
+
+class SankeyNode(BaseModel):
+    name: str
+
+
+class SankeyLink(BaseModel):
+    source: str
+    target: str
+    value: DecimalStr
+
+
+class SankeyGraph(BaseModel):
+    nodes: list[SankeyNode]
+    links: list[SankeyLink]
+
+
+class TimeHeatPoint(BaseModel):
+    day_of_week: int  # 0 = Sunday .. 6 = Saturday (SQLite strftime('%w'))
+    hour: int  # 0..23
+    total: DecimalStr
+    count: int
+
+
+class ForecastPoint(BaseModel):
+    month: str  # YYYY-MM
+    balance: DecimalStr
+    projected: bool
+
+
+class ForecastTarget(BaseModel):
+    balance: DecimalStr
+    months_to_target: float | None
+    date_at_target: date | None
+
+
+class ForecastOut(BaseModel):
+    current_net_worth: DecimalStr
+    current_net_worth_at: datetime | None
+    rolling_window_days: int
+    rolling_income: DecimalStr
+    rolling_expenses: DecimalStr
+    rolling_net: DecimalStr
+    monthly_income: DecimalStr
+    monthly_expenses: DecimalStr
+    monthly_net: DecimalStr
+    history: list[ForecastPoint]
+    projection: list[ForecastPoint]
+    target: ForecastTarget | None
+
+
 class SyncRunOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -506,6 +566,334 @@ def _register_routes(app: FastAPI) -> None:
         session.commit()
         session.refresh(existing)
         return BudgetOut.model_validate(existing)
+
+    # ── Insights ──────────────────────────────────────────────────────────────
+
+    @app.get("/api/insights/calendar", response_model=list[CalendarPoint])
+    def insights_calendar(
+        session: SessionDep,
+        from_: Annotated[date | None, Query(alias="from")] = None,
+        to: date | None = None,
+        account_ids: Annotated[list[str] | None, Query()] = None,
+    ) -> list[CalendarPoint]:
+        """Daily spending totals for a GitHub-style heatmap. Excludes transfers."""
+        start, end = _date_range(from_, to, default_days=365)
+        query = (
+            select(
+                col(Transaction.local_date),
+                func.sum(func.abs(col(Transaction.amount))).label("total"),
+            )
+            .where(
+                col(Transaction.local_date) >= start,
+                col(Transaction.local_date) <= end,
+                col(Transaction.direction) == "debit",
+                col(Transaction.category).not_in(["TRANSFER_IN", "TRANSFER_OUT"]),
+            )
+            .group_by(col(Transaction.local_date))
+            .order_by(col(Transaction.local_date))
+        )
+        if account_ids:
+            query = query.where(col(Transaction.account_id).in_(account_ids))
+        rows = session.exec(query).all()
+        return [CalendarPoint(date=r[0], total=Decimal(str(r[1] or 0))) for r in rows]
+
+    @app.get("/api/insights/treemap", response_model=list[TreemapNode])
+    def insights_treemap(
+        session: SessionDep,
+        from_: Annotated[date | None, Query(alias="from")] = None,
+        to: date | None = None,
+        account_ids: Annotated[list[str] | None, Query()] = None,
+    ) -> list[TreemapNode]:
+        """Category → merchant treemap rows (debits only, transfers excluded)."""
+        start, end = _date_range(from_, to)
+        query = (
+            select(
+                func.coalesce(col(Transaction.category), "UNCATEGORISED").label("category"),
+                func.coalesce(col(Transaction.merchant_name), "Unknown").label("merchant"),
+                func.sum(func.abs(col(Transaction.amount))).label("total"),
+            )
+            .where(
+                col(Transaction.local_date) >= start,
+                col(Transaction.local_date) <= end,
+                col(Transaction.direction) == "debit",
+                col(Transaction.category).not_in(["TRANSFER_IN", "TRANSFER_OUT"]),
+            )
+            .group_by(col(Transaction.category), col(Transaction.merchant_name))
+            .order_by(desc("total"))
+        )
+        if account_ids:
+            query = query.where(col(Transaction.account_id).in_(account_ids))
+        rows = session.exec(query).all()
+        # Roll up into hierarchy.
+        by_cat: dict[str, list[TreemapNode]] = {}
+        cat_totals: dict[str, Decimal] = {}
+        for category, merchant, total in rows:
+            amount = Decimal(str(total or 0))
+            by_cat.setdefault(category, []).append(TreemapNode(name=merchant, value=amount))
+            cat_totals[category] = cat_totals.get(category, Decimal(0)) + amount
+        return [
+            TreemapNode(name=cat, value=cat_totals[cat], children=by_cat[cat])
+            for cat in sorted(cat_totals, key=cat_totals.get, reverse=True)  # type: ignore[arg-type]
+        ]
+
+    @app.get("/api/insights/sankey", response_model=SankeyGraph)
+    def insights_sankey(
+        session: SessionDep,
+        from_: Annotated[date | None, Query(alias="from")] = None,
+        to: date | None = None,
+        account_ids: Annotated[list[str] | None, Query()] = None,
+    ) -> SankeyGraph:
+        """Income → categories → 'Savings' Sankey (transfers excluded).
+
+        Income node aggregates all credit transactions; each spending category
+        is a sink; any leftover net flows to 'Savings'.
+        """
+        start, end = _date_range(from_, to, default_days=90)
+        # Income.
+        income_q = (
+            select(func.sum(col(Transaction.amount)))
+            .where(
+                col(Transaction.local_date) >= start,
+                col(Transaction.local_date) <= end,
+                col(Transaction.direction) == "credit",
+                col(Transaction.category).not_in(["TRANSFER_IN", "TRANSFER_OUT"]),
+            )
+        )
+        if account_ids:
+            income_q = income_q.where(col(Transaction.account_id).in_(account_ids))
+        income_total = Decimal(str(session.exec(income_q).one() or 0))
+
+        # Spending by category.
+        spend_q = (
+            select(
+                func.coalesce(col(Transaction.category), "UNCATEGORISED").label("category"),
+                func.sum(func.abs(col(Transaction.amount))).label("total"),
+            )
+            .where(
+                col(Transaction.local_date) >= start,
+                col(Transaction.local_date) <= end,
+                col(Transaction.direction) == "debit",
+                col(Transaction.category).not_in(["TRANSFER_IN", "TRANSFER_OUT"]),
+            )
+            .group_by(col(Transaction.category))
+            .order_by(desc("total"))
+        )
+        if account_ids:
+            spend_q = spend_q.where(col(Transaction.account_id).in_(account_ids))
+        spend_rows = session.exec(spend_q).all()
+
+        nodes: list[SankeyNode] = []
+        links: list[SankeyLink] = []
+        if income_total <= 0 and not spend_rows:
+            return SankeyGraph(nodes=nodes, links=links)
+
+        nodes.append(SankeyNode(name="Income"))
+        spent_total = Decimal(0)
+        for category, total in spend_rows:
+            amount = Decimal(str(total or 0))
+            if amount <= 0:
+                continue
+            nodes.append(SankeyNode(name=category))
+            links.append(SankeyLink(source="Income", target=category, value=amount))
+            spent_total += amount
+        savings = income_total - spent_total
+        if savings > 0:
+            nodes.append(SankeyNode(name="Savings"))
+            links.append(SankeyLink(source="Income", target="Savings", value=savings))
+        return SankeyGraph(nodes=nodes, links=links)
+
+    @app.get("/api/insights/time-heatmap", response_model=list[TimeHeatPoint])
+    def insights_time_heatmap(
+        session: SessionDep,
+        from_: Annotated[date | None, Query(alias="from")] = None,
+        to: date | None = None,
+        account_ids: Annotated[list[str] | None, Query()] = None,
+    ) -> list[TimeHeatPoint]:
+        """Day-of-week x hour-of-day spending grid.
+        Uses `posted_at` (a UTC datetime) — rows without one are skipped."""
+        start, end = _date_range(from_, to, default_days=180)
+        dow = func.strftime("%w", col(Transaction.posted_at))
+        hour = func.strftime("%H", col(Transaction.posted_at))
+        query = (
+            select(
+                dow.label("dow"),
+                hour.label("hour"),
+                func.sum(func.abs(col(Transaction.amount))).label("total"),
+                func.count().label("count"),
+            )
+            .where(
+                col(Transaction.local_date) >= start,
+                col(Transaction.local_date) <= end,
+                col(Transaction.direction) == "debit",
+                col(Transaction.posted_at).is_not(None),
+                col(Transaction.category).not_in(["TRANSFER_IN", "TRANSFER_OUT"]),
+            )
+            .group_by("dow", "hour")
+        )
+        if account_ids:
+            query = query.where(col(Transaction.account_id).in_(account_ids))
+        rows = session.exec(query).all()
+        out: list[TimeHeatPoint] = []
+        for dow_val, hour_val, total, count in rows:
+            if dow_val is None or hour_val is None:
+                continue
+            out.append(
+                TimeHeatPoint(
+                    day_of_week=int(dow_val),
+                    hour=int(hour_val),
+                    total=Decimal(str(total or 0)),
+                    count=int(count),
+                )
+            )
+        return out
+
+    # ── Forecast ──────────────────────────────────────────────────────────────
+
+    @app.get("/api/forecast", response_model=ForecastOut)
+    def forecast(
+        session: SessionDep,
+        target_balance: Decimal | None = None,
+        rolling_days: Annotated[int, Query(ge=14, le=365)] = 90,
+        horizon_months: Annotated[int, Query(ge=1, le=120)] = 24,
+        account_ids: Annotated[list[str] | None, Query()] = None,
+    ) -> ForecastOut:
+        """Net-worth forecast based on rolling-window average net cashflow."""
+        today = datetime.now(UTC).date()
+        rolling_start = today - timedelta(days=rolling_days)
+
+        # Latest balance snapshot per account → sum.
+        latest_subq = (
+            select(
+                col(BalanceSnapshot.account_id),
+                func.max(col(BalanceSnapshot.taken_at)).label("latest_at"),
+            )
+            .group_by(col(BalanceSnapshot.account_id))
+            .subquery()
+        )
+        latest_q = (
+            select(
+                func.sum(col(BalanceSnapshot.current_balance)),
+                func.max(col(BalanceSnapshot.taken_at)),
+            )
+            .join(
+                latest_subq,
+                (col(BalanceSnapshot.account_id) == latest_subq.c.account_id)
+                & (col(BalanceSnapshot.taken_at) == latest_subq.c.latest_at),
+            )
+        )
+        if account_ids:
+            latest_q = latest_q.where(col(BalanceSnapshot.account_id).in_(account_ids))
+        current_total_raw, current_at = session.exec(latest_q).one()
+        current_net_worth = Decimal(str(current_total_raw or 0))
+
+        # Rolling window cashflow (transfers excluded).
+        income_q = select(func.sum(col(Transaction.amount))).where(
+            col(Transaction.local_date) >= rolling_start,
+            col(Transaction.local_date) <= today,
+            col(Transaction.direction) == "credit",
+            col(Transaction.category).not_in(["TRANSFER_IN", "TRANSFER_OUT"]),
+        )
+        expense_q = select(func.sum(func.abs(col(Transaction.amount)))).where(
+            col(Transaction.local_date) >= rolling_start,
+            col(Transaction.local_date) <= today,
+            col(Transaction.direction) == "debit",
+            col(Transaction.category).not_in(["TRANSFER_IN", "TRANSFER_OUT"]),
+        )
+        if account_ids:
+            income_q = income_q.where(col(Transaction.account_id).in_(account_ids))
+            expense_q = expense_q.where(col(Transaction.account_id).in_(account_ids))
+        income_total = Decimal(str(session.exec(income_q).one() or 0))
+        expense_total = Decimal(str(session.exec(expense_q).one() or 0))
+        net_total = income_total - expense_total
+
+        months_in_window = Decimal(str(rolling_days)) / Decimal("30.4375")
+        if months_in_window > 0:
+            monthly_income = income_total / months_in_window
+            monthly_expenses = expense_total / months_in_window
+            monthly_net = net_total / months_in_window
+        else:
+            monthly_income = monthly_expenses = monthly_net = Decimal(0)
+
+        # Historical month-end net worth (last balance snapshot per month).
+        month_expr = func.strftime("%Y-%m", col(BalanceSnapshot.taken_at))
+        hist_subq = (
+            select(
+                col(BalanceSnapshot.account_id).label("acc"),
+                month_expr.label("ym"),
+                func.max(col(BalanceSnapshot.taken_at)).label("month_end"),
+            )
+            .group_by(col(BalanceSnapshot.account_id), "ym")
+            .subquery()
+        )
+        hist_q = (
+            select(hist_subq.c.ym, func.sum(col(BalanceSnapshot.current_balance)))
+            .join(
+                hist_subq,
+                (col(BalanceSnapshot.account_id) == hist_subq.c.acc)
+                & (col(BalanceSnapshot.taken_at) == hist_subq.c.month_end),
+            )
+            .group_by(hist_subq.c.ym)
+            .order_by(hist_subq.c.ym)
+        )
+        if account_ids:
+            hist_q = hist_q.where(col(BalanceSnapshot.account_id).in_(account_ids))
+        hist_rows = session.exec(hist_q).all()
+        history = [
+            ForecastPoint(month=str(r[0]), balance=Decimal(str(r[1] or 0)), projected=False)
+            for r in hist_rows
+        ]
+
+        # Projection: extrapolate from current point at monthly_net for horizon_months.
+        projection: list[ForecastPoint] = []
+        anchor_balance = current_net_worth
+        anchor_year, anchor_month = today.year, today.month
+        for i in range(1, horizon_months + 1):
+            m = anchor_month + i
+            y = anchor_year + (m - 1) // 12
+            m = ((m - 1) % 12) + 1
+            projection.append(
+                ForecastPoint(
+                    month=f"{y:04d}-{m:02d}",
+                    balance=anchor_balance + monthly_net * i,
+                    projected=True,
+                )
+            )
+
+        # Target / FI calculator.
+        target: ForecastTarget | None = None
+        if target_balance is not None:
+            months_to: float | None = None
+            date_at: date | None = None
+            delta = Decimal(str(target_balance)) - current_net_worth
+            if delta <= 0:
+                months_to = 0.0
+                date_at = today
+            elif monthly_net > 0:
+                months_to = float(delta / monthly_net)
+                m = today.month + int(months_to)
+                y = today.year + (m - 1) // 12
+                m = ((m - 1) % 12) + 1
+                date_at = date(y, m, min(today.day, 28))
+            target = ForecastTarget(
+                balance=Decimal(str(target_balance)),
+                months_to_target=months_to,
+                date_at_target=date_at,
+            )
+
+        return ForecastOut(
+            current_net_worth=current_net_worth,
+            current_net_worth_at=current_at,
+            rolling_window_days=rolling_days,
+            rolling_income=income_total,
+            rolling_expenses=expense_total,
+            rolling_net=net_total,
+            monthly_income=monthly_income,
+            monthly_expenses=monthly_expenses,
+            monthly_net=monthly_net,
+            history=history,
+            projection=projection,
+            target=target,
+        )
 
     @app.get("/api/sync-runs", response_model=list[SyncRunOut])
     def list_sync_runs(

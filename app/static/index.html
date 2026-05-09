@@ -26,6 +26,8 @@
     <button class="tab is-active" data-tab="spending">Spending</button>
     <button class="tab" data-tab="networth">Net worth</button>
     <button class="tab" data-tab="cashflow">Cash flow</button>
+    <button class="tab" data-tab="insights">Insights</button>
+    <button class="tab" data-tab="forecast">Forecast</button>
 </nav>
 
 <main>
@@ -89,6 +91,65 @@
                 <tbody></tbody>
             </table>
             <p class="empty" id="empty-accounts" hidden>No accounts yet.</p>
+        </div>
+    </section>
+
+    <!-- Insights tab -->
+    <section class="tab-panel" data-panel="insights">
+        <div class="card card--full">
+            <h2>Spending heatmap <span class="hint hint--inline">(daily totals over the date range)</span></h2>
+            <div id="chart-calendar" class="chart chart--tall"></div>
+            <p class="empty" id="empty-calendar" hidden>No spending recorded yet.</p>
+        </div>
+        <div class="grid">
+            <div class="card">
+                <h2>Where the money goes <span class="hint hint--inline">(income → categories → savings)</span></h2>
+                <div id="chart-sankey" class="chart chart--tall"></div>
+                <p class="empty" id="empty-sankey" hidden>Need both income and expenses to draw a flow.</p>
+            </div>
+            <div class="card">
+                <h2>Category breakdown</h2>
+                <p class="hint">Drill into a category to see merchants. Right-click anywhere to zoom out.</p>
+                <div id="chart-treemap" class="chart chart--tall"></div>
+                <p class="empty" id="empty-treemap" hidden>No spending in this date range.</p>
+            </div>
+        </div>
+        <div class="card card--full">
+            <h2>When you spend <span class="hint hint--inline">(day-of-week × hour, by transaction value)</span></h2>
+            <div id="chart-time-heatmap" class="chart"></div>
+            <p class="empty" id="empty-time-heatmap" hidden>Not enough timestamped transactions yet.</p>
+        </div>
+    </section>
+
+    <!-- Forecast tab -->
+    <section class="tab-panel" data-panel="forecast">
+        <div class="grid grid--3">
+            <div class="card">
+                <h2>Net worth</h2>
+                <div class="metric metric--med" id="forecast-current">—</div>
+                <div class="hint" id="forecast-current-at">—</div>
+            </div>
+            <div class="card">
+                <h2>Monthly net <span class="hint hint--inline">(rolling 90 days)</span></h2>
+                <div class="metric metric--med" id="forecast-monthly-net">—</div>
+                <div class="hint" id="forecast-monthly-detail">—</div>
+            </div>
+            <div class="card">
+                <h2>FI calculator</h2>
+                <form id="forecast-target-form" class="forecast-target">
+                    <label>Target balance <input type="text" name="target" placeholder="e.g. 100000"></label>
+                    <button type="submit">Calculate</button>
+                </form>
+                <div class="metric metric--med" id="forecast-target-result">—</div>
+                <div class="hint" id="forecast-target-detail"></div>
+            </div>
+        </div>
+        <div class="card card--full">
+            <h2>Net-worth history & projection
+                <span class="hint hint--inline">(solid: actual month-end snapshots — dashed: extrapolated at current trend)</span>
+            </h2>
+            <div id="chart-forecast" class="chart chart--tall"></div>
+            <p class="empty" id="empty-forecast" hidden>Need at least one balance snapshot to project.</p>
         </div>
     </section>
 

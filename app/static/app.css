@@ -261,6 +261,26 @@ main {
     padding: 24px 0;
     color: var(--good);
 }
+.metric--med {
+    font-size: 28px;
+    padding: 12px 0 6px;
+    color: var(--fg);
+}
+.grid--3 { grid-template-columns: repeat(3, 1fr); }
+
+.forecast-target {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+.forecast-target label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    color: var(--fg-muted);
+    font-size: 12px;
+}
 
 .budgets { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; }
 .budget {
@@ -306,7 +326,7 @@ main {
 }
 
 @media (max-width: 800px) {
-    .grid { grid-template-columns: 1fr; }
+    .grid, .grid--3 { grid-template-columns: 1fr; }
     .top__filters { width: 100%; margin-left: 0; }
     .budget-add form { grid-template-columns: 1fr; }
 }
