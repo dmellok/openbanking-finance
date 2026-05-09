@@ -10,6 +10,7 @@ from app.normalise import (
     trade_from_rest,
     transaction_from_rest,
 )
+
 from tests.fixtures import (
     ACCOUNTS_RESPONSE,
     BALANCES_RESPONSE,

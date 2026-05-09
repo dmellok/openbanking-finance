@@ -5,11 +5,11 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from sqlmodel import select
-
 from app.backfill import _run
 from app.db import session_scope
 from app.models import Account, Trade, Transaction
+from sqlmodel import select
+
 from tests.conftest import make_mock_client
 from tests.fixtures import (
     ACCOUNTS_RESPONSE,

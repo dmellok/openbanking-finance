@@ -6,7 +6,6 @@ from pathlib import Path
 
 import httpx
 import pytest
-
 from app.api import create_app
 from app.db import session_scope
 from app.models import Account, BalanceSnapshot, Connection, Transaction

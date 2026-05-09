@@ -6,11 +6,11 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from sqlmodel import select
-
 from app.db import session_scope
 from app.models import Account, BalanceSnapshot, Connection, SyncRun, Trade, Transaction
 from app.poller import run_once
+from sqlmodel import select
+
 from tests.conftest import make_mock_client
 from tests.fixtures import (
     ACCOUNTS_RESPONSE,

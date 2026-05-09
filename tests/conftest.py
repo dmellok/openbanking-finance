@@ -7,7 +7,6 @@ from typing import Any
 
 import httpx
 import pytest
-
 from app.config import get_settings
 
 
