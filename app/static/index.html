@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>pyFinance</title>
+    <link rel="stylesheet" href="/static/app.css">
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.6.0/dist/echarts.min.js"></script>
+</head>
+<body>
+<header class="top">
+    <div class="top__brand">pyFinance</div>
+    <div class="top__filters">
+        <label>From <input type="date" id="filter-from"></label>
+        <label>To <input type="date" id="filter-to"></label>
+        <details id="account-picker" class="account-picker">
+            <summary>Accounts: <span id="account-picker-summary">all</span></summary>
+            <div id="account-picker-list" class="account-picker__list"></div>
+        </details>
+        <button id="btn-refresh">Refresh</button>
+        <span id="poll-status" class="poll-status">Last poll: …</span>
+    </div>
+</header>
+
+<nav class="tabs">
+    <button class="tab is-active" data-tab="spending">Spending</button>
+    <button class="tab" data-tab="networth">Net worth</button>
+    <button class="tab" data-tab="cashflow">Cash flow</button>
+</nav>
+
+<main>
+    <!-- Spending tab -->
+    <section class="tab-panel is-active" data-panel="spending">
+        <div class="grid">
+            <div class="card">
+                <h2>Spending by category</h2>
+                <p class="hint">Click a bar to filter the transactions table below.</p>
+                <div id="chart-by-category" class="chart"></div>
+                <p class="empty" id="empty-by-category" hidden>No spending in this date range yet.</p>
+            </div>
+            <div class="card">
+                <h2>Top merchants</h2>
+                <table class="data-table" id="table-top-merchants">
+                    <thead><tr><th>Merchant</th><th>Total</th><th class="num">#</th></tr></thead>
+                    <tbody></tbody>
+                </table>
+                <p class="empty" id="empty-top-merchants" hidden>No merchants in this range.</p>
+            </div>
+        </div>
+        <div class="card card--full">
+            <h2>Transactions <span id="tx-filter-pill" class="pill" hidden></span>
+                <button id="tx-filter-clear" class="pill__clear" hidden>×</button>
+            </h2>
+            <table class="data-table" id="table-transactions">
+                <thead><tr>
+                    <th>Date</th><th>Description</th><th>Merchant</th>
+                    <th>Category</th><th class="num">Amount</th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+            <p class="empty" id="empty-transactions" hidden>No transactions yet — run a backfill or wait for the first poll.</p>
+            <div class="pager">
+                <button id="tx-prev">‹ Prev</button>
+                <span id="tx-pager-info">—</span>
+                <button id="tx-next">Next ›</button>
+            </div>
+        </div>
+    </section>
+
+    <!-- Net worth tab -->
+    <section class="tab-panel" data-panel="networth">
+        <div class="card card--full">
+            <h2>Net worth <span class="hint hint--inline">(naive cross-currency sum)</span>
+                <span class="toggle">
+                    <button class="toggle__btn is-active" data-mode="series">Total</button>
+                    <button class="toggle__btn" data-mode="per-account">Per account</button>
+                </span>
+            </h2>
+            <div id="chart-networth" class="chart chart--tall"></div>
+            <p class="empty" id="empty-networth" hidden>No balance snapshots recorded yet.</p>
+        </div>
+        <div class="card card--full">
+            <h2>Latest snapshot</h2>
+            <table class="data-table" id="table-accounts">
+                <thead><tr>
+                    <th>Account</th><th>Type</th><th>Currency</th>
+                    <th class="num">Latest balance</th><th>As of</th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+            <p class="empty" id="empty-accounts" hidden>No accounts yet.</p>
+        </div>
+    </section>
+
+    <!-- Cash flow tab -->
+    <section class="tab-panel" data-panel="cashflow">
+        <div class="card card--full">
+            <h2>Cash flow by month <span class="hint hint--inline">(transfers excluded)</span></h2>
+            <div id="chart-cashflow" class="chart"></div>
+            <p class="empty" id="empty-cashflow" hidden>Not enough data yet.</p>
+        </div>
+        <div class="grid">
+            <div class="card">
+                <h2>Savings rate <span class="hint hint--inline">(latest month)</span></h2>
+                <div id="savings-rate" class="metric">—</div>
+            </div>
+            <div class="card">
+                <h2>Budgets <span class="hint hint--inline">(latest month)</span></h2>
+                <div id="budgets" class="budgets"></div>
+                <details class="budget-add">
+                    <summary>Add / update budget</summary>
+                    <form id="budget-form">
+                        <input name="category" placeholder="Category (e.g. FOOD_AND_DRINK)" required>
+                        <input name="monthly_limit" placeholder="Limit (e.g. 800.00)" required>
+                        <input name="currency" placeholder="AUD" value="AUD" required>
+                        <button type="submit">Save</button>
+                    </form>
+                </details>
+            </div>
+        </div>
+    </section>
+</main>
+
+<div id="spinner" class="spinner" hidden>polling…</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
