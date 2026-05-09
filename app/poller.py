@@ -215,6 +215,14 @@ async def run_once(
         failures: list[str] = []
         skipped_accounts = 0
         attempted_accounts = 0
+        # Connection-level circuit breaker: if /v1/transactions or /v1/trades
+        # fails for any account on a connection, skip the same endpoint for
+        # the rest of that connection's accounts for the remainder of the
+        # cycle. Failures on banking endpoints are almost always connection-
+        # wide (the upstream bank/Fiskil pipeline is the failing component),
+        # so retrying every account just burns rate-limit budget.
+        tx_circuit_open: set[str] = set()
+        trade_circuit_open: set[str] = set()
 
         for (
             acc_id,
@@ -235,6 +243,15 @@ async def run_once(
                 )
                 skipped_accounts += 1
                 continue
+
+            if conn_id in tx_circuit_open:
+                logger.info(
+                    "skipping account %s: connection %s tx circuit-broken this cycle",
+                    acc_id, conn_id,
+                )
+                skipped_accounts += 1
+                continue
+
             attempted_accounts += 1
 
             # 4. Transactions per account (per-account error isolation)
@@ -257,15 +274,25 @@ async def run_once(
                     _bump_watermark(session, acc_id, "last_polled_transactions_at")
             except (RedbarkAPIError, httpx.HTTPError) as exc:
                 # Don't bump the watermark — next cycle retries the same range.
+                # Open the circuit for this connection's tx pulls for the rest
+                # of the cycle so we don't hammer a broken provider.
+                tx_circuit_open.add(conn_id)
                 logger.warning(
-                    "transactions for account %s failed (%s) — skipping, watermark not advanced",
-                    acc_id, exc,
+                    "transactions for account %s failed (%s) — skipping, watermark not advanced; "
+                    "tx circuit opened for connection %s",
+                    acc_id, exc, conn_id,
                 )
                 failures.append(f"{acc_id}/transactions: {exc}")
                 continue  # don't try trades on the same account if tx itself broke
 
             # 5. Trades — only for investment accounts on brokerage connections
             if conn_category != "brokerage" or acc_type != "investment":
+                continue
+            if conn_id in trade_circuit_open:
+                logger.info(
+                    "skipping trades for account %s: connection %s trade circuit-broken",
+                    acc_id, conn_id,
+                )
                 continue
             try:
                 from_trades = _from_for(trades_watermark, kind=kind)
@@ -282,9 +309,11 @@ async def run_once(
                 with session_scope() as session:
                     _bump_watermark(session, acc_id, "last_polled_trades_at")
             except (RedbarkAPIError, httpx.HTTPError) as exc:
+                trade_circuit_open.add(conn_id)
                 logger.warning(
-                    "trades for account %s failed (%s) — skipping, watermark not advanced",
-                    acc_id, exc,
+                    "trades for account %s failed (%s) — skipping, watermark not advanced; "
+                    "trade circuit opened for connection %s",
+                    acc_id, exc, conn_id,
                 )
                 failures.append(f"{acc_id}/trades: {exc}")
 

@@ -237,14 +237,20 @@ async def test_one_account_503_does_not_abort_cycle(temp_db: Path) -> None:
         client_mod._backoff = real_backoff
 
     assert counts["failed_accounts"] == 1
-    # Other accounts (the Savings, Credit Card, Investment) still get their tx pulled.
-    assert counts["transactions"] >= 1
-    assert counts["trades"] == 2  # investment account succeeded
+    # Circuit breaker: the other 2 accounts on the same banking connection are
+    # skipped (savings + credit card on b7c4a1e2-...). The investment account
+    # is on a separate brokerage connection so it still gets polled.
+    assert counts["skipped_accounts"] == 2
+    assert counts["trades"] == 2  # investment account on different connection succeeded
     with session_scope() as session:
         accounts = {a.id: a for a in session.exec(select(Account)).all()}
         # Bad account watermark stayed null (no successful poll yet).
         assert accounts[bad_account].last_polled_transactions_at is None
-        # Investment account got its tx + trades watermarks bumped.
+        # Other accounts on the same connection: also no watermark bump
+        # (they were circuit-skipped before being attempted).
+        assert accounts["b2c3d4e5-f6a7-8901-b2c3-d4e5f6a78901"].last_polled_transactions_at is None
+        assert accounts["c3d4e5f6-a7b8-9012-c3d4-e5f6a7b89012"].last_polled_transactions_at is None
+        # Investment account on the brokerage connection got tx + trades watermarks bumped.
         inv = accounts["d4e5f6a7-b8c9-0123-d4e5-f6a7b8c90123"]
         assert inv.last_polled_transactions_at is not None
         assert inv.last_polled_trades_at is not None
@@ -252,6 +258,57 @@ async def test_one_account_503_does_not_abort_cycle(temp_db: Path) -> None:
         runs = session.exec(select(SyncRun)).all()
         assert runs[0].status == "partial"
         assert bad_account in (runs[0].detail or "")
+
+
+async def test_circuit_breaker_short_circuits_failing_connection(temp_db: Path) -> None:
+    """First account 503 on a connection should open the circuit so we don't
+    even attempt /v1/transactions for sibling accounts on the same connection
+    for the rest of the cycle."""
+
+    bad_account = "a1b2c3d4-e5f6-7890-a1b2-c3d4e5f67890"  # first account on banking conn
+    siblings = {
+        "b2c3d4e5-f6a7-8901-b2c3-d4e5f6a78901",
+        "c3d4e5f6-a7b8-9012-c3d4-e5f6a7b89012",
+    }
+    tx_calls_per_account: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        params = dict(request.url.params)
+        if path == "/v1/connections":
+            return httpx.Response(200, json=CONNECTIONS_RESPONSE)
+        if path == "/v1/accounts":
+            return httpx.Response(200, json=ACCOUNTS_RESPONSE)
+        if path == "/v1/balances":
+            return httpx.Response(200, json={"data": []})
+        if path == "/v1/transactions":
+            account_id = params.get("accountId", "")
+            tx_calls_per_account.append(account_id)
+            if account_id == bad_account:
+                return httpx.Response(503, json={"error": {"message": "provider down"}})
+            return httpx.Response(200, json={"data": [], "pagination": {"total": 0, "limit": 500, "offset": 0, "hasMore": False}})
+        if path == "/v1/trades":
+            return httpx.Response(200, json={"data": [], "pagination": {"total": 0, "limit": 500, "offset": 0, "hasMore": False}})
+        return httpx.Response(404, json={"message": f"unmocked {path}"})
+
+    import app.redbark_client as client_mod
+
+    real_backoff = client_mod._backoff
+    client_mod._backoff = lambda _attempt: 0.0
+    try:
+        client, _http = make_mock_client(handler)
+        await run_once(client)
+        await client.aclose()
+    finally:
+        client_mod._backoff = real_backoff
+
+    # The bad account was attempted (and 503'd through the retry loop).
+    assert bad_account in tx_calls_per_account
+    # Sibling accounts on the same connection were never even attempted.
+    sibling_attempts = [aid for aid in tx_calls_per_account if aid in siblings]
+    assert sibling_attempts == [], (
+        f"circuit breaker leaked: siblings were attempted: {sibling_attempts}"
+    )
 
 
 async def test_inactive_connection_accounts_are_skipped(temp_db: Path) -> None:
