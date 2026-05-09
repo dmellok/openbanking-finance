@@ -18,6 +18,7 @@
             <div id="account-picker-list" class="account-picker__list"></div>
         </details>
         <button id="btn-refresh">Refresh</button>
+        <button id="btn-theme" class="theme-toggle" title="Toggle light/dark mode" aria-label="Toggle theme">🌙</button>
         <span id="poll-status" class="poll-status">Last poll: …</span>
     </div>
 </header>
@@ -27,6 +28,7 @@
     <button class="tab" data-tab="networth">Net worth</button>
     <button class="tab" data-tab="cashflow">Cash flow</button>
     <button class="tab" data-tab="insights">Insights</button>
+    <button class="tab" data-tab="trends">Trends</button>
     <button class="tab" data-tab="forecast">Forecast</button>
 </nav>
 
@@ -118,6 +120,31 @@
             <h2>When you spend <span class="hint hint--inline">(day-of-week × hour, by transaction value)</span></h2>
             <div id="chart-time-heatmap" class="chart"></div>
             <p class="empty" id="empty-time-heatmap" hidden>Not enough timestamped transactions yet.</p>
+        </div>
+    </section>
+
+    <!-- Trends tab -->
+    <section class="tab-panel" data-panel="trends">
+        <div class="card card--full">
+            <h2>Rolling 30-day spend
+                <span class="hint hint--inline">(daily total across the last 30 days, smoothed trend line)</span>
+            </h2>
+            <div id="chart-rolling-spend" class="chart"></div>
+            <p class="empty" id="empty-rolling-spend" hidden>Need spending data over a longer range.</p>
+        </div>
+        <div class="card card--full">
+            <h2>Monthly category mix
+                <span class="hint hint--inline">(stacked, biggest categories at the bottom)</span>
+            </h2>
+            <div id="chart-category-by-month" class="chart chart--tall"></div>
+            <p class="empty" id="empty-category-by-month" hidden>Need at least one month of spending.</p>
+        </div>
+        <div class="card card--full">
+            <h2>Day-of-month spending
+                <span class="hint hint--inline">(average per occurrence — peaks tend to mark payday or rent day)</span>
+            </h2>
+            <div id="chart-day-of-month" class="chart"></div>
+            <p class="empty" id="empty-day-of-month" hidden>Not enough months in range to average.</p>
         </div>
     </section>
 

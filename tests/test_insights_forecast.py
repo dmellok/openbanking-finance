@@ -182,12 +182,57 @@ async def test_forecast_target_calculator(api_client: httpx.AsyncClient, monkeyp
     assert 4.5 < months < 6.0
 
 
+async def test_trends_rolling_spend_window(api_client: httpx.AsyncClient) -> None:
+    _seed_insights()
+    resp = await api_client.get("/api/trends/rolling-spend", params={
+        "from": "2026-04-25", "to": "2026-04-30", "window": 30,
+    })
+    assert resp.status_code == 200
+    body = resp.json()
+    # Window covers 25/3..25/4 onwards, so the rolling totals should include
+    # the April expenses we seeded. Rolling on 2026-04-30 includes everything
+    # from 2026-04-01 onwards: 120+80+300+50+200 = 750
+    by_date = {row["date"]: Decimal(row["rolling_total"]) for row in body}
+    assert by_date["2026-04-30"] == Decimal("750")
+
+
+async def test_trends_category_by_month(api_client: httpx.AsyncClient) -> None:
+    _seed_insights()
+    resp = await api_client.get("/api/trends/category-by-month", params={
+        "from": "2026-03-01", "to": "2026-04-30",
+    })
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["months"] == ["2026-03", "2026-04"]
+    by_cat = {s["name"]: [Decimal(v) for v in s["data"]] for s in body["series"]}
+    # FOOD_AND_DRINK: 150 in March (Coles), 400 in April (120+80+200)
+    assert by_cat["FOOD_AND_DRINK"] == [Decimal("150"), Decimal("400")]
+    assert by_cat["TRAVEL"] == [Decimal("400"), Decimal("300")]
+
+
+async def test_trends_day_of_month_averages_across_months(api_client: httpx.AsyncClient) -> None:
+    _seed_insights()
+    resp = await api_client.get("/api/trends/day-of-month", params={
+        "from": "2026-03-01", "to": "2026-04-30",
+    })
+    assert resp.status_code == 200
+    body = resp.json()
+    by_day = {row["day"]: row for row in body}
+    # Day 12: only March (150), 1 month → avg = 150
+    assert Decimal(by_day[12]["avg"]) == Decimal("150")
+    assert by_day[12]["months_seen"] == 1
+    # Day 20: $50 (Apr) + $400 (Mar) = $450 across 2 months → avg = 225
+    assert Decimal(by_day[20]["avg"]) == Decimal("225")
+    assert by_day[20]["months_seen"] == 2
+
+
 async def test_insights_endpoints_empty_db(api_client: httpx.AsyncClient) -> None:
     """Empty-DB sanity: nothing should crash, all endpoints return reasonable empty payloads."""
     for path in [
         "/api/insights/calendar",
         "/api/insights/treemap",
         "/api/insights/time-heatmap",
+        "/api/trends/day-of-month",
     ]:
         resp = await api_client.get(path)
         assert resp.status_code == 200
@@ -195,6 +240,9 @@ async def test_insights_endpoints_empty_db(api_client: httpx.AsyncClient) -> Non
     resp = await api_client.get("/api/insights/sankey")
     assert resp.status_code == 200
     assert resp.json() == {"nodes": [], "links": []}
+    resp = await api_client.get("/api/trends/category-by-month")
+    assert resp.status_code == 200
+    assert resp.json() == {"months": [], "series": []}
     resp = await api_client.get("/api/forecast")
     assert resp.status_code == 200
     body = resp.json()

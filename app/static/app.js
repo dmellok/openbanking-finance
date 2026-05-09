@@ -19,6 +19,58 @@ const state = {
 
 const charts = {};
 
+// ── Theme ─────────────────────────────────────────────────────────────────────
+
+let theme;
+
+function computeTheme() {
+    const cs = getComputedStyle(document.documentElement);
+    const name = document.documentElement.dataset.theme || 'dark';
+    const isDark = name === 'dark';
+    return {
+        name,
+        echartsTheme: isDark ? 'dark' : null,
+        fg: cs.getPropertyValue('--fg').trim(),
+        fgMuted: cs.getPropertyValue('--fg-muted').trim(),
+        accent: cs.getPropertyValue('--accent').trim(),
+        accentSoft: cs.getPropertyValue('--accent-soft').trim(),
+        good: cs.getPropertyValue('--good').trim(),
+        bad: cs.getPropertyValue('--bad').trim(),
+        warn: cs.getPropertyValue('--warn').trim(),
+        bg: cs.getPropertyValue('--bg').trim(),
+        bgCard: cs.getPropertyValue('--bg-card').trim(),
+        border: cs.getPropertyValue('--border').trim(),
+        heatStops: isDark
+            ? ['#0e1116', '#1f4068', '#3a72c4', '#79b3ff']
+            : ['#f0f3f7', '#9ec5fe', '#3a72c4', '#0a4ea8'],
+        // ECharts treemap branding shifts; vibrant palette is fine in either mode.
+        catPalette: isDark
+            ? ['#4f9cff', '#3fb950', '#d29922', '#f85149', '#a371f7', '#39c5bb', '#ec6cb9', '#f0883e']
+            : ['#0969da', '#1a7f37', '#9a6700', '#cf222e', '#8250df', '#1b7c83', '#bf3989', '#bc4c00'],
+    };
+}
+
+function applyTheme(name) {
+    document.documentElement.dataset.theme = name;
+    try { localStorage.setItem('pyfinance.theme', name); } catch (_) {}
+    theme = computeTheme();
+    // Dispose all chart instances so they reinit with the new ECharts theme.
+    for (const key of Object.keys(charts)) {
+        charts[key]?.dispose();
+        delete charts[key];
+    }
+    const btn = $('#btn-theme');
+    if (btn) btn.textContent = name === 'dark' ? '☀️' : '🌙';
+    if (state.activeTab) refreshCurrentTab();
+}
+
+function initTheme() {
+    let stored = 'dark';
+    try { stored = localStorage.getItem('pyfinance.theme') || 'dark'; } catch (_) {}
+    document.documentElement.dataset.theme = stored;
+    theme = computeTheme();
+}
+
 // ── Utilities ─────────────────────────────────────────────────────────────────
 
 function $(sel) { return document.querySelector(sel); }
@@ -210,7 +262,7 @@ async function refreshSpending() {
 
 function renderByCategoryChart(data) {
     setEmpty('empty-by-category', data.length === 0);
-    const chart = charts.byCategory ||= echarts.init($('#chart-by-category'), 'dark');
+    const chart = charts.byCategory ||= echarts.init($('#chart-by-category'), theme.echartsTheme);
     if (data.length === 0) { chart.clear(); return; }
     const sorted = [...data].sort((a, b) => Number(b.total) - Number(a.total));
     chart.setOption({
@@ -220,14 +272,14 @@ function renderByCategoryChart(data) {
         xAxis: {
             type: 'category',
             data: sorted.map(d => d.category),
-            axisLabel: { interval: 0, rotate: 35, color: '#8b949e' },
+            axisLabel: { interval: 0, rotate: 35, color: theme.fgMuted },
         },
-        yAxis: { type: 'value', axisLabel: { color: '#8b949e' } },
+        yAxis: { type: 'value', axisLabel: { color: theme.fgMuted } },
         series: [{
             type: 'bar',
             data: sorted.map(d => Number(d.total)),
-            itemStyle: { color: '#4f9cff' },
-            emphasis: { itemStyle: { color: '#79b3ff' } },
+            itemStyle: { color: theme.accent },
+            emphasis: { itemStyle: { color: theme.accentSoft } },
         }],
     }, true);
     chart.off('click');
@@ -297,7 +349,7 @@ async function refreshNetWorth() {
         : '/api/net-worth/per-account';
     const points = await fetchJSON(`${BASE}${path}`, commonParams());
     setEmpty('empty-networth', points.length === 0);
-    const chart = charts.networth ||= echarts.init($('#chart-networth'), 'dark');
+    const chart = charts.networth ||= echarts.init($('#chart-networth'), theme.echartsTheme);
     if (points.length === 0) { chart.clear(); return; }
 
     if (state.networthMode === 'series') {
@@ -305,15 +357,15 @@ async function refreshNetWorth() {
             backgroundColor: 'transparent',
             tooltip: { trigger: 'axis' },
             grid: { left: 70, right: 20, top: 20, bottom: 50 },
-            xAxis: { type: 'time', axisLabel: { color: '#8b949e' } },
-            yAxis: { type: 'value', axisLabel: { color: '#8b949e' } },
+            xAxis: { type: 'time', axisLabel: { color: theme.fgMuted } },
+            yAxis: { type: 'value', axisLabel: { color: theme.fgMuted } },
             series: [{
                 type: 'line',
                 showSymbol: false,
                 smooth: false,
                 data: points.map(p => [p.taken_at, Number(p.total)]),
-                lineStyle: { color: '#4f9cff', width: 2 },
-                areaStyle: { color: 'rgba(79, 156, 255, 0.15)' },
+                lineStyle: { color: theme.accent, width: 2 },
+                areaStyle: { color: theme.accent, opacity: 0.15 },
             }],
         }, true);
     } else {
@@ -326,10 +378,10 @@ async function refreshNetWorth() {
         chart.setOption({
             backgroundColor: 'transparent',
             tooltip: { trigger: 'axis' },
-            legend: { textStyle: { color: '#8b949e' }, top: 0 },
+            legend: { textStyle: { color: theme.fgMuted }, top: 0 },
             grid: { left: 70, right: 20, top: 40, bottom: 50 },
-            xAxis: { type: 'time', axisLabel: { color: '#8b949e' } },
-            yAxis: { type: 'value', axisLabel: { color: '#8b949e' } },
+            xAxis: { type: 'time', axisLabel: { color: theme.fgMuted } },
+            yAxis: { type: 'value', axisLabel: { color: theme.fgMuted } },
             series: Array.from(groups.entries()).map(([id, data]) => ({
                 name: accountsById.get(id)?.name || id.slice(0, 8),
                 type: 'line',
@@ -357,7 +409,7 @@ function initNetWorthToggle() {
 async function refreshCashflow() {
     const months = await fetchJSON(`${BASE}/api/cashflow/monthly`, commonParams());
     setEmpty('empty-cashflow', months.length === 0);
-    const chart = charts.cashflow ||= echarts.init($('#chart-cashflow'), 'dark');
+    const chart = charts.cashflow ||= echarts.init($('#chart-cashflow'), theme.echartsTheme);
     if (months.length === 0) {
         chart.clear();
         $('#savings-rate').textContent = '—';
@@ -365,13 +417,13 @@ async function refreshCashflow() {
         chart.setOption({
             backgroundColor: 'transparent',
             tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
-            legend: { textStyle: { color: '#8b949e' }, top: 0 },
+            legend: { textStyle: { color: theme.fgMuted }, top: 0 },
             grid: { left: 70, right: 20, top: 40, bottom: 50 },
-            xAxis: { type: 'category', data: months.map(m => m.month), axisLabel: { color: '#8b949e' } },
-            yAxis: { type: 'value', axisLabel: { color: '#8b949e' } },
+            xAxis: { type: 'category', data: months.map(m => m.month), axisLabel: { color: theme.fgMuted } },
+            yAxis: { type: 'value', axisLabel: { color: theme.fgMuted } },
             series: [
-                { name: 'Income', type: 'bar', data: months.map(m => Number(m.income)), itemStyle: { color: '#3fb950' } },
-                { name: 'Expenses', type: 'bar', data: months.map(m => Number(m.expenses)), itemStyle: { color: '#f85149' } },
+                { name: 'Income', type: 'bar', data: months.map(m => Number(m.income)), itemStyle: { color: theme.good } },
+                { name: 'Expenses', type: 'bar', data: months.map(m => Number(m.expenses)), itemStyle: { color: theme.bad } },
             ],
         }, true);
         const latest = months[months.length - 1];
@@ -457,7 +509,7 @@ async function refreshInsights() {
 
 function renderCalendarHeatmap(points) {
     setEmpty('empty-calendar', points.length === 0);
-    const chart = charts.calendar ||= echarts.init($('#chart-calendar'), 'dark');
+    const chart = charts.calendar ||= echarts.init($('#chart-calendar'), theme.echartsTheme);
     if (points.length === 0) { chart.clear(); return; }
     const values = points.map(p => Number(p.total));
     const max = Math.max(1, ...values);
@@ -475,18 +527,18 @@ function renderCalendarHeatmap(points) {
             orient: 'horizontal',
             left: 'center',
             top: 0,
-            textStyle: { color: '#8b949e' },
-            inRange: { color: ['#0e1116', '#1f4068', '#3a72c4', '#79b3ff'] },
+            textStyle: { color: theme.fgMuted },
+            inRange: { color: theme.heatStops },
         },
         calendar: {
             range: yearStart === yearEnd ? yearStart : [sortedDates[0], sortedDates[sortedDates.length - 1]],
             cellSize: ['auto', 14],
             top: 50, bottom: 20, left: 40, right: 20,
-            itemStyle: { color: '#0e1116', borderColor: '#1c232c', borderWidth: 1 },
-            yearLabel: { color: '#8b949e' },
-            monthLabel: { color: '#8b949e' },
-            dayLabel: { color: '#8b949e' },
-            splitLine: { lineStyle: { color: '#2a3340' } },
+            itemStyle: { color: theme.bg, borderColor: theme.border, borderWidth: 1 },
+            yearLabel: { color: theme.fgMuted },
+            monthLabel: { color: theme.fgMuted },
+            dayLabel: { color: theme.fgMuted },
+            splitLine: { lineStyle: { color: theme.border } },
         },
         series: [{
             type: 'heatmap',
@@ -499,7 +551,7 @@ function renderCalendarHeatmap(points) {
 function renderSankey(graph) {
     const empty = !graph.nodes || graph.nodes.length === 0 || graph.links.length === 0;
     setEmpty('empty-sankey', empty);
-    const chart = charts.sankey ||= echarts.init($('#chart-sankey'), 'dark');
+    const chart = charts.sankey ||= echarts.init($('#chart-sankey'), theme.echartsTheme);
     if (empty) { chart.clear(); return; }
     chart.setOption({
         backgroundColor: 'transparent',
@@ -515,7 +567,7 @@ function renderSankey(graph) {
             links: graph.links.map(l => ({ ...l, value: Number(l.value) })),
             emphasis: { focus: 'adjacency' },
             lineStyle: { color: 'gradient', curveness: 0.5 },
-            label: { color: '#e6edf3' },
+            label: { color: theme.fg },
             nodeAlign: 'justify',
             nodeWidth: 14,
             nodeGap: 12,
@@ -526,7 +578,7 @@ function renderSankey(graph) {
 
 function renderTreemap(data) {
     setEmpty('empty-treemap', data.length === 0);
-    const chart = charts.treemap ||= echarts.init($('#chart-treemap'), 'dark');
+    const chart = charts.treemap ||= echarts.init($('#chart-treemap'), theme.echartsTheme);
     if (data.length === 0) { chart.clear(); return; }
     const toNumeric = nodes => nodes.map(n => ({
         name: n.name,
@@ -541,17 +593,17 @@ function renderTreemap(data) {
             data: toNumeric(data),
             roam: false,
             nodeClick: 'zoomToNode',
-            breadcrumb: { itemStyle: { color: '#161b22', borderColor: '#2a3340', textStyle: { color: '#8b949e' } } },
-            label: { color: '#e6edf3', formatter: '{b}\n{c}' },
-            upperLabel: { show: true, height: 24, color: '#e6edf3' },
+            breadcrumb: { itemStyle: { color: theme.bgCard, borderColor: theme.border, textStyle: { color: theme.fgMuted } } },
+            label: { color: theme.fg, formatter: '{b}\n{c}' },
+            upperLabel: { show: true, height: 24, color: theme.fg },
             levels: [
-                { itemStyle: { borderColor: '#0e1116', borderWidth: 0, gapWidth: 1 } },
+                { itemStyle: { borderColor: theme.bg, borderWidth: 0, gapWidth: 1 } },
                 {
-                    itemStyle: { borderColor: '#0e1116', borderWidth: 5, gapWidth: 1 },
+                    itemStyle: { borderColor: theme.bg, borderWidth: 5, gapWidth: 1 },
                     upperLabel: { show: true },
                 },
                 {
-                    itemStyle: { borderColor: '#1c232c', borderWidth: 2, gapWidth: 1 },
+                    itemStyle: { borderColor: theme.border, borderWidth: 2, gapWidth: 1 },
                     upperLabel: { show: false },
                 },
             ],
@@ -561,7 +613,7 @@ function renderTreemap(data) {
 
 function renderTimeHeatmap(points) {
     setEmpty('empty-time-heatmap', points.length === 0);
-    const chart = charts.timeHeatmap ||= echarts.init($('#chart-time-heatmap'), 'dark');
+    const chart = charts.timeHeatmap ||= echarts.init($('#chart-time-heatmap'), theme.echartsTheme);
     if (points.length === 0) { chart.clear(); return; }
     const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
     const hours = Array.from({ length: 24 }, (_, h) => `${String(h).padStart(2, '0')}:00`);
@@ -574,22 +626,127 @@ function renderTimeHeatmap(points) {
             formatter: p => `${days[p.value[1]]} ${hours[p.value[0]]}<br>${fmtMoney(p.value[2])}`,
         },
         grid: { left: 50, right: 20, top: 40, bottom: 60 },
-        xAxis: { type: 'category', data: hours, splitArea: { show: true }, axisLabel: { color: '#8b949e', rotate: 35 } },
-        yAxis: { type: 'category', data: days, splitArea: { show: true }, axisLabel: { color: '#8b949e' } },
+        xAxis: { type: 'category', data: hours, splitArea: { show: true }, axisLabel: { color: theme.fgMuted, rotate: 35 } },
+        yAxis: { type: 'category', data: days, splitArea: { show: true }, axisLabel: { color: theme.fgMuted } },
         visualMap: {
             min: 0, max,
             calculable: true,
             orient: 'horizontal',
             left: 'center',
             bottom: 0,
-            textStyle: { color: '#8b949e' },
-            inRange: { color: ['#0e1116', '#1f4068', '#3a72c4', '#79b3ff'] },
+            textStyle: { color: theme.fgMuted },
+            inRange: { color: theme.heatStops },
         },
         series: [{
             type: 'heatmap',
             data,
             label: { show: false },
-            emphasis: { itemStyle: { shadowBlur: 6, shadowColor: 'rgba(79, 156, 255, 0.5)' } },
+            emphasis: { itemStyle: { shadowBlur: 6, shadowColor: theme.accent } },
+        }],
+    }, true);
+}
+
+// ── Trends tab ────────────────────────────────────────────────────────────────
+
+async function refreshTrends() {
+    const [rolling, byMonth, dayOfMonth] = await Promise.all([
+        fetchJSON(`${BASE}/api/trends/rolling-spend`, { ...commonParams(), window: 30 }),
+        fetchJSON(`${BASE}/api/trends/category-by-month`, commonParams()),
+        fetchJSON(`${BASE}/api/trends/day-of-month`, commonParams()),
+    ]);
+    renderRollingSpend(rolling);
+    renderCategoryByMonth(byMonth);
+    renderDayOfMonth(dayOfMonth);
+}
+
+function renderRollingSpend(points) {
+    setEmpty('empty-rolling-spend', points.length === 0);
+    const chart = charts.rollingSpend ||= echarts.init($('#chart-rolling-spend'), theme.echartsTheme);
+    if (points.length === 0) { chart.clear(); return; }
+    const values = points.map(p => Number(p.rolling_total));
+    const mean = values.reduce((a, b) => a + b, 0) / values.length;
+    chart.setOption({
+        backgroundColor: 'transparent',
+        tooltip: { trigger: 'axis', formatter: p => `${p[0].axisValueLabel}<br>${fmtMoney(p[0].value[1])}` },
+        grid: { left: 70, right: 20, top: 20, bottom: 50 },
+        xAxis: { type: 'time', axisLabel: { color: theme.fgMuted } },
+        yAxis: { type: 'value', axisLabel: { color: theme.fgMuted } },
+        series: [{
+            type: 'line',
+            data: points.map(p => [p.date, Number(p.rolling_total)]),
+            showSymbol: false,
+            smooth: true,
+            lineStyle: { color: theme.accent, width: 2 },
+            areaStyle: { color: theme.accent, opacity: 0.15 },
+            markLine: {
+                silent: true,
+                symbol: 'none',
+                lineStyle: { color: theme.fgMuted, type: 'dashed' },
+                label: { color: theme.fgMuted, formatter: `mean ${fmtMoney(mean)}` },
+                data: [{ yAxis: mean }],
+            },
+        }],
+    }, true);
+}
+
+function renderCategoryByMonth(d) {
+    const empty = !d.months || d.months.length === 0 || d.series.length === 0;
+    setEmpty('empty-category-by-month', empty);
+    const chart = charts.categoryByMonth ||= echarts.init($('#chart-category-by-month'), theme.echartsTheme);
+    if (empty) { chart.clear(); return; }
+    const palette = theme.catPalette;
+    chart.setOption({
+        backgroundColor: 'transparent',
+        color: palette,
+        tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+        legend: { textStyle: { color: theme.fgMuted }, top: 0, type: 'scroll' },
+        grid: { left: 70, right: 20, top: 50, bottom: 50 },
+        xAxis: { type: 'category', data: d.months, axisLabel: { color: theme.fgMuted } },
+        yAxis: { type: 'value', axisLabel: { color: theme.fgMuted } },
+        series: d.series.map((s, i) => ({
+            name: s.name,
+            type: 'bar',
+            stack: 'total',
+            data: s.data.map(v => Number(v)),
+            itemStyle: { color: palette[i % palette.length] },
+            emphasis: { focus: 'series' },
+        })),
+    }, true);
+}
+
+function renderDayOfMonth(points) {
+    setEmpty('empty-day-of-month', points.length === 0);
+    const chart = charts.dayOfMonth ||= echarts.init($('#chart-day-of-month'), theme.echartsTheme);
+    if (points.length === 0) { chart.clear(); return; }
+    const days = Array.from({ length: 31 }, (_, i) => i + 1);
+    const byDay = new Map(points.map(p => [p.day, p]));
+    const data = days.map(d => Number(byDay.get(d)?.avg ?? 0));
+    chart.setOption({
+        backgroundColor: 'transparent',
+        tooltip: {
+            trigger: 'axis',
+            formatter: p => {
+                const point = byDay.get(p[0].axisValue) ?? {};
+                return `Day ${p[0].axisValue}<br>` +
+                    `Avg: ${fmtMoney(p[0].value)}<br>` +
+                    `Across ${point.months_seen ?? 0} months`;
+            },
+        },
+        grid: { left: 70, right: 20, top: 20, bottom: 40 },
+        xAxis: { type: 'category', data: days, axisLabel: { color: theme.fgMuted, interval: 1 } },
+        yAxis: { type: 'value', axisLabel: { color: theme.fgMuted } },
+        series: [{
+            type: 'bar',
+            data,
+            itemStyle: {
+                color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
+                    colorStops: [
+                        { offset: 0, color: theme.accent },
+                        { offset: 1, color: theme.accentSoft },
+                    ],
+                },
+            },
+            emphasis: { itemStyle: { color: theme.accent } },
         }],
     }, true);
 }
@@ -628,7 +785,7 @@ function renderForecastMetrics(d) {
 function renderForecastChart(d) {
     const empty = d.history.length === 0 && Number(d.current_net_worth) === 0;
     setEmpty('empty-forecast', empty);
-    const chart = charts.forecast ||= echarts.init($('#chart-forecast'), 'dark');
+    const chart = charts.forecast ||= echarts.init($('#chart-forecast'), theme.echartsTheme);
     if (empty) { chart.clear(); return; }
     const histData = d.history.map(p => [p.month, Number(p.balance)]);
     const projData = d.projection.map(p => [p.month, Number(p.balance)]);
@@ -637,27 +794,27 @@ function renderForecastChart(d) {
     chart.setOption({
         backgroundColor: 'transparent',
         tooltip: { trigger: 'axis' },
-        legend: { textStyle: { color: '#8b949e' }, top: 0 },
+        legend: { textStyle: { color: theme.fgMuted }, top: 0 },
         grid: { left: 70, right: 20, top: 40, bottom: 50 },
-        xAxis: { type: 'category', boundaryGap: false, axisLabel: { color: '#8b949e' } },
-        yAxis: { type: 'value', axisLabel: { color: '#8b949e' } },
+        xAxis: { type: 'category', boundaryGap: false, axisLabel: { color: theme.fgMuted } },
+        yAxis: { type: 'value', axisLabel: { color: theme.fgMuted } },
         series: [
             {
                 name: 'Actual',
                 type: 'line',
                 showSymbol: true,
                 data: histData,
-                lineStyle: { color: '#4f9cff', width: 2 },
-                itemStyle: { color: '#4f9cff' },
-                areaStyle: { color: 'rgba(79, 156, 255, 0.15)' },
+                lineStyle: { color: theme.accent, width: 2 },
+                itemStyle: { color: theme.accent },
+                areaStyle: { color: theme.accent, opacity: 0.15 },
             },
             {
                 name: 'Projected',
                 type: 'line',
                 showSymbol: false,
                 data: projData,
-                lineStyle: { color: '#3fb950', width: 2, type: 'dashed' },
-                itemStyle: { color: '#3fb950' },
+                lineStyle: { color: theme.good, width: 2, type: 'dashed' },
+                itemStyle: { color: theme.good },
             },
         ],
     }, true);
@@ -712,6 +869,7 @@ async function refreshCurrentTab() {
         else if (state.activeTab === 'networth') await refreshNetWorth();
         else if (state.activeTab === 'cashflow') await refreshCashflow();
         else if (state.activeTab === 'insights') await refreshInsights();
+        else if (state.activeTab === 'trends') await refreshTrends();
         else if (state.activeTab === 'forecast') await refreshForecast();
     } catch (e) {
         console.error(e);
@@ -735,10 +893,16 @@ async function refreshAll() {
 // ── Init ──────────────────────────────────────────────────────────────────────
 
 function init() {
+    initTheme();
     initFilters();
     initNetWorthToggle();
     initBudgetForm();
     initForecastTargetForm();
+    const themeBtn = $('#btn-theme');
+    themeBtn.textContent = theme.name === 'dark' ? '☀️' : '🌙';
+    themeBtn.addEventListener('click', () => {
+        applyTheme(theme.name === 'dark' ? 'light' : 'dark');
+    });
 
     $$('.tab').forEach(b => b.addEventListener('click', () => activateTab(b.dataset.tab)));
     $('#btn-refresh').addEventListener('click', refreshAll);

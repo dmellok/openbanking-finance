@@ -252,6 +252,23 @@ class ForecastOut(BaseModel):
     target: ForecastTarget | None
 
 
+class RollingSpendPoint(BaseModel):
+    date: date
+    rolling_total: DecimalStr
+
+
+class CategoryByMonth(BaseModel):
+    months: list[str]
+    series: list[dict[str, object]]  # [{name: "FOOD", data: [12.0, 34.0, ...]}]
+
+
+class DayOfMonthPoint(BaseModel):
+    day: int  # 1..31
+    total: DecimalStr
+    months_seen: int
+    avg: DecimalStr
+
+
 class SyncRunOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -743,6 +760,149 @@ def _register_routes(app: FastAPI) -> None:
                     hour=int(hour_val),
                     total=Decimal(str(total or 0)),
                     count=int(count),
+                )
+            )
+        return out
+
+    # ── Trends ────────────────────────────────────────────────────────────────
+
+    @app.get("/api/trends/rolling-spend", response_model=list[RollingSpendPoint])
+    def trends_rolling_spend(
+        session: SessionDep,
+        from_: Annotated[date | None, Query(alias="from")] = None,
+        to: date | None = None,
+        account_ids: Annotated[list[str] | None, Query()] = None,
+        window: Annotated[int, Query(ge=2, le=180)] = 30,
+    ) -> list[RollingSpendPoint]:
+        """Rolling-window total of daily spending. Excludes transfers."""
+        start, end = _date_range(from_, to, default_days=180)
+        query = (
+            select(
+                col(Transaction.local_date),
+                func.sum(func.abs(col(Transaction.amount))).label("total"),
+            )
+            .where(
+                col(Transaction.local_date) >= start - timedelta(days=window),
+                col(Transaction.local_date) <= end,
+                col(Transaction.direction) == "debit",
+                col(Transaction.category).not_in(["TRANSFER_IN", "TRANSFER_OUT"]),
+            )
+            .group_by(col(Transaction.local_date))
+            .order_by(col(Transaction.local_date))
+        )
+        if account_ids:
+            query = query.where(col(Transaction.account_id).in_(account_ids))
+        rows = session.exec(query).all()
+        daily = {r[0]: Decimal(str(r[1] or 0)) for r in rows}
+
+        out: list[RollingSpendPoint] = []
+        cursor = start
+        while cursor <= end:
+            total = Decimal(0)
+            for offset in range(window):
+                d = cursor - timedelta(days=offset)
+                total += daily.get(d, Decimal(0))
+            out.append(RollingSpendPoint(date=cursor, rolling_total=total))
+            cursor += timedelta(days=1)
+        return out
+
+    @app.get("/api/trends/category-by-month", response_model=CategoryByMonth)
+    def trends_category_by_month(
+        session: SessionDep,
+        from_: Annotated[date | None, Query(alias="from")] = None,
+        to: date | None = None,
+        account_ids: Annotated[list[str] | None, Query()] = None,
+    ) -> CategoryByMonth:
+        """Stacked-bar source: total spend per (month, category). Transfers excluded."""
+        start, end = _date_range(from_, to, default_days=365)
+        month_expr = func.strftime("%Y-%m", col(Transaction.local_date))
+        query = (
+            select(
+                month_expr.label("month"),
+                func.coalesce(col(Transaction.category), "UNCATEGORISED").label("category"),
+                func.sum(func.abs(col(Transaction.amount))).label("total"),
+            )
+            .where(
+                col(Transaction.local_date) >= start,
+                col(Transaction.local_date) <= end,
+                col(Transaction.direction) == "debit",
+                col(Transaction.category).not_in(["TRANSFER_IN", "TRANSFER_OUT"]),
+            )
+            .group_by("month", col(Transaction.category))
+            .order_by("month", desc("total"))
+        )
+        if account_ids:
+            query = query.where(col(Transaction.account_id).in_(account_ids))
+        rows = session.exec(query).all()
+        if not rows:
+            return CategoryByMonth(months=[], series=[])
+        months: list[str] = []
+        seen_months: set[str] = set()
+        cat_totals: dict[str, Decimal] = {}
+        cell: dict[tuple[str, str], Decimal] = {}
+        for month, category, total in rows:
+            month = str(month)
+            if month not in seen_months:
+                months.append(month)
+                seen_months.add(month)
+            amount = Decimal(str(total or 0))
+            cell[(month, category)] = amount
+            cat_totals[category] = cat_totals.get(category, Decimal(0)) + amount
+        # Order categories by overall size so the stacked bar is most readable.
+        categories = sorted(cat_totals, key=cat_totals.get, reverse=True)  # type: ignore[arg-type]
+        series = [
+            {
+                "name": cat,
+                "data": [_format_decimal(cell.get((m, cat), Decimal(0))) for m in months],
+            }
+            for cat in categories
+        ]
+        return CategoryByMonth(months=months, series=series)
+
+    @app.get("/api/trends/day-of-month", response_model=list[DayOfMonthPoint])
+    def trends_day_of_month(
+        session: SessionDep,
+        from_: Annotated[date | None, Query(alias="from")] = None,
+        to: date | None = None,
+        account_ids: Annotated[list[str] | None, Query()] = None,
+    ) -> list[DayOfMonthPoint]:
+        """Average daily spend by day-of-month (1..31). Transfers excluded.
+
+        Useful for spotting payday spikes, end-of-month creep, or rent-day patterns.
+        """
+        start, end = _date_range(from_, to, default_days=365)
+        day_expr = func.strftime("%d", col(Transaction.local_date))
+        month_expr = func.strftime("%Y-%m", col(Transaction.local_date))
+        query = (
+            select(
+                day_expr.label("day"),
+                func.sum(func.abs(col(Transaction.amount))).label("total"),
+                func.count(func.distinct(month_expr)).label("months_seen"),
+            )
+            .where(
+                col(Transaction.local_date) >= start,
+                col(Transaction.local_date) <= end,
+                col(Transaction.direction) == "debit",
+                col(Transaction.category).not_in(["TRANSFER_IN", "TRANSFER_OUT"]),
+            )
+            .group_by("day")
+            .order_by("day")
+        )
+        if account_ids:
+            query = query.where(col(Transaction.account_id).in_(account_ids))
+        rows = session.exec(query).all()
+        out: list[DayOfMonthPoint] = []
+        for day_str, total, months_seen in rows:
+            if day_str is None:
+                continue
+            total_dec = Decimal(str(total or 0))
+            months = int(months_seen or 1)
+            out.append(
+                DayOfMonthPoint(
+                    day=int(day_str),
+                    total=total_dec,
+                    months_seen=months,
+                    avg=total_dec / months if months > 0 else total_dec,
                 )
             )
         return out
