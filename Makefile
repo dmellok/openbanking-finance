@@ -5,7 +5,7 @@ RUNNER := $(shell command -v uv >/dev/null 2>&1 && echo "uv run" || echo "")
 
 install:
 	@if command -v uv >/dev/null 2>&1; then \
-		uv venv --python 3.12 && uv sync --extra dev; \
+		uv sync --python 3.12 --extra dev; \
 	else \
 		$(PYTHON) -m venv .venv && . .venv/bin/activate && pip install -e ".[dev]"; \
 	fi
