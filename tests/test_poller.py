@@ -97,6 +97,8 @@ async def test_run_once_populates_all_entities_and_sets_watermarks(temp_db: Path
         "balances": 4,
         "transactions": 6,
         "trades": 2,
+        "failed_accounts": 0,
+        "skipped_accounts": 0,
     }
 
     with session_scope() as session:
@@ -181,6 +183,122 @@ async def test_second_poll_uses_watermark_minus_24h(temp_db: Path) -> None:
         assert timedelta(hours=23) < delta < timedelta(hours=25), (
             f"expected ~24h overlap, got {delta}"
         )
+
+
+async def test_one_account_503_does_not_abort_cycle(temp_db: Path) -> None:
+    """A 503 on one account's /v1/transactions must NOT kill the whole cycle.
+    Other accounts still get polled, the failing account's watermark stays put."""
+
+    bad_account = "a1b2c3d4-e5f6-7890-a1b2-c3d4e5f67890"  # the Everyday Account
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        params = dict(request.url.params)
+        if path == "/v1/connections":
+            return httpx.Response(200, json=CONNECTIONS_RESPONSE)
+        if path == "/v1/accounts":
+            return httpx.Response(200, json=ACCOUNTS_RESPONSE)
+        if path == "/v1/balances":
+            return httpx.Response(
+                200,
+                json={"data": [r for r in BALANCES_RESPONSE["data"] if r["accountId"] in params.get("accountIds", "").split(",")]},  # type: ignore[union-attr]
+            )
+        if path == "/v1/transactions":
+            account_id = params.get("accountId")
+            if account_id == bad_account:
+                return httpx.Response(503, json={"error": {"message": "provider down"}})
+            data = [
+                tx for tx in TRANSACTIONS_RESPONSE["data"]  # type: ignore[union-attr]
+                if tx["accountId"] == account_id
+            ]
+            return httpx.Response(
+                200,
+                json={"data": data, "pagination": {"total": len(data), "limit": 500, "offset": 0, "hasMore": False}},
+            )
+        if path == "/v1/trades":
+            account_id = params.get("accountId")
+            data = [t for t in TRADES_RESPONSE["data"] if t["accountId"] == account_id]  # type: ignore[union-attr]
+            return httpx.Response(
+                200,
+                json={"data": data, "pagination": {"total": len(data), "limit": 500, "offset": 0, "hasMore": False}},
+            )
+        return httpx.Response(404, json={"message": f"unmocked {path}"})
+
+    # Patch backoff to 0 so the 503-retry doesn't actually delay the test.
+    import app.redbark_client as client_mod
+
+    real_backoff = client_mod._backoff
+    client_mod._backoff = lambda _attempt: 0.0
+    try:
+        client, _http = make_mock_client(handler)
+        counts = await run_once(client)
+        await client.aclose()
+    finally:
+        client_mod._backoff = real_backoff
+
+    assert counts["failed_accounts"] == 1
+    # Other accounts (the Savings, Credit Card, Investment) still get their tx pulled.
+    assert counts["transactions"] >= 1
+    assert counts["trades"] == 2  # investment account succeeded
+    with session_scope() as session:
+        accounts = {a.id: a for a in session.exec(select(Account)).all()}
+        # Bad account watermark stayed null (no successful poll yet).
+        assert accounts[bad_account].last_polled_transactions_at is None
+        # Investment account got its tx + trades watermarks bumped.
+        inv = accounts["d4e5f6a7-b8c9-0123-d4e5-f6a7b8c90123"]
+        assert inv.last_polled_transactions_at is not None
+        assert inv.last_polled_trades_at is not None
+        # SyncRun marked partial with detail mentioning the failing account.
+        runs = session.exec(select(SyncRun)).all()
+        assert runs[0].status == "partial"
+        assert bad_account in (runs[0].detail or "")
+
+
+async def test_inactive_connection_accounts_are_skipped(temp_db: Path) -> None:
+    """Accounts on connections with status != 'active' must be skipped entirely
+    (no /v1/transactions or /v1/trades calls at all)."""
+    invalidated_response = {
+        "data": [
+            {**c, "status": "invalidated"} if c["category"] == "banking" else c
+            for c in CONNECTIONS_RESPONSE["data"]  # type: ignore[union-attr]
+        ]
+    }
+    tx_calls: list[str] = []
+    trade_calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        params = dict(request.url.params)
+        if path == "/v1/connections":
+            return httpx.Response(200, json=invalidated_response)
+        if path == "/v1/accounts":
+            return httpx.Response(200, json=ACCOUNTS_RESPONSE)
+        if path == "/v1/balances":
+            return httpx.Response(200, json={"data": []})
+        if path == "/v1/transactions":
+            tx_calls.append(params.get("accountId", ""))
+            return httpx.Response(200, json={"data": [], "pagination": {"total": 0, "limit": 500, "offset": 0, "hasMore": False}})
+        if path == "/v1/trades":
+            trade_calls.append(params.get("accountId", ""))
+            return httpx.Response(200, json={"data": [], "pagination": {"total": 0, "limit": 500, "offset": 0, "hasMore": False}})
+        return httpx.Response(404, json={"message": f"unmocked {path}"})
+
+    client, _http = make_mock_client(handler)
+    counts = await run_once(client)
+    await client.aclose()
+
+    # The 3 banking accounts are on the invalidated connection — they must be skipped.
+    banking_account_ids = {
+        "a1b2c3d4-e5f6-7890-a1b2-c3d4e5f67890",
+        "c3d4e5f6-a7b8-9012-c3d4-e5f6a7b89012",
+        "b2c3d4e5-f6a7-8901-b2c3-d4e5f6a78901",
+    }
+    assert not any(aid in banking_account_ids for aid in tx_calls)
+    # The investment account on the active brokerage connection still gets polled.
+    assert "d4e5f6a7-b8c9-0123-d4e5-f6a7b8c90123" in tx_calls
+    assert "d4e5f6a7-b8c9-0123-d4e5-f6a7b8c90123" in trade_calls
+    assert counts["skipped_accounts"] == 3
+    assert counts["failed_accounts"] == 0
 
 
 async def test_run_once_records_error_on_failure(temp_db: Path) -> None:

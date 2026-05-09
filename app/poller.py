@@ -19,6 +19,7 @@ from collections.abc import Iterable
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 
+import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from sqlmodel import Session, select
@@ -39,7 +40,12 @@ from app.normalise import (
     trade_from_rest,
     transaction_from_rest,
 )
-from app.redbark_client import RedbarkClient
+from app.redbark_client import RedbarkAPIError, RedbarkClient
+
+# Connection statuses we consider polling-eligible. Anything else (invalidated,
+# revoked, pending_mfa) needs user re-auth — skip those accounts entirely so we
+# don't burn rate-limit budget retrying calls that will never succeed.
+_ACTIVE_CONN_STATUSES = frozenset({"active"})
 
 logger = logging.getLogger(__name__)
 
@@ -188,8 +194,9 @@ async def run_once(
         # Snapshot the fields we need for the per-account loops as plain tuples,
         # so we don't touch detached SQLAlchemy instances after the session closes.
         with session_scope() as session:
-            connection_categories = {
-                c.id: c.category for c in session.exec(select(Connection)).all()
+            connection_meta: dict[str, tuple[str, str]] = {
+                c.id: (c.category, c.status)
+                for c in session.exec(select(Connection)).all()
             }
             account_rows: list[
                 tuple[str, str, str, str, datetime | None, datetime | None]
@@ -205,7 +212,10 @@ async def run_once(
                 for a in session.exec(select(Account)).all()
             ]
 
-        # 4. Transactions per account
+        failures: list[str] = []
+        skipped_accounts = 0
+        attempted_accounts = 0
+
         for (
             acc_id,
             conn_id,
@@ -214,44 +224,91 @@ async def run_once(
             tx_watermark,
             trades_watermark,
         ) in account_rows:
-            if conn_id not in connection_categories:
+            conn_info = connection_meta.get(conn_id)
+            if conn_info is None:
                 continue
-            from_ = _from_for(tx_watermark, kind=kind)
-            tx_count = 0
-            async for raw in client.list_transactions(
-                connection_id=conn_id,
-                account_id=acc_id,
-                from_=from_,
-            ):
+            conn_category, conn_status = conn_info
+            if conn_status not in _ACTIVE_CONN_STATUSES:
+                logger.warning(
+                    "skipping account %s: connection %s is %s — needs re-auth",
+                    acc_id, conn_id, conn_status,
+                )
+                skipped_accounts += 1
+                continue
+            attempted_accounts += 1
+
+            # 4. Transactions per account (per-account error isolation)
+            try:
+                from_ = _from_for(tx_watermark, kind=kind)
+                tx_count = 0
+                async for raw in client.list_transactions(
+                    connection_id=conn_id,
+                    account_id=acc_id,
+                    from_=from_,
+                ):
+                    with session_scope() as session:
+                        upsert_transaction(
+                            session,
+                            transaction_from_rest(raw, currency_fallback=currency),
+                        )
+                    tx_count += 1
+                counts["transactions"] += tx_count
                 with session_scope() as session:
-                    upsert_transaction(
-                        session,
-                        transaction_from_rest(raw, currency_fallback=currency),
-                    )
-                tx_count += 1
-            counts["transactions"] += tx_count
-            with session_scope() as session:
-                _bump_watermark(session, acc_id, "last_polled_transactions_at")
+                    _bump_watermark(session, acc_id, "last_polled_transactions_at")
+            except (RedbarkAPIError, httpx.HTTPError) as exc:
+                # Don't bump the watermark — next cycle retries the same range.
+                logger.warning(
+                    "transactions for account %s failed (%s) — skipping, watermark not advanced",
+                    acc_id, exc,
+                )
+                failures.append(f"{acc_id}/transactions: {exc}")
+                continue  # don't try trades on the same account if tx itself broke
 
             # 5. Trades — only for investment accounts on brokerage connections
-            if connection_categories[conn_id] != "brokerage" or acc_type != "investment":
+            if conn_category != "brokerage" or acc_type != "investment":
                 continue
-            from_trades = _from_for(trades_watermark, kind=kind)
-            trade_count = 0
-            async for raw in client.list_trades(
-                connection_id=conn_id,
-                account_id=acc_id,
-                from_=from_trades,
-            ):
+            try:
+                from_trades = _from_for(trades_watermark, kind=kind)
+                trade_count = 0
+                async for raw in client.list_trades(
+                    connection_id=conn_id,
+                    account_id=acc_id,
+                    from_=from_trades,
+                ):
+                    with session_scope() as session:
+                        upsert_trade(session, trade_from_rest(raw))
+                    trade_count += 1
+                counts["trades"] += trade_count
                 with session_scope() as session:
-                    upsert_trade(session, trade_from_rest(raw))
-                trade_count += 1
-            counts["trades"] += trade_count
-            with session_scope() as session:
-                _bump_watermark(session, acc_id, "last_polled_trades_at")
+                    _bump_watermark(session, acc_id, "last_polled_trades_at")
+            except (RedbarkAPIError, httpx.HTTPError) as exc:
+                logger.warning(
+                    "trades for account %s failed (%s) — skipping, watermark not advanced",
+                    acc_id, exc,
+                )
+                failures.append(f"{acc_id}/trades: {exc}")
 
-        _finalise_run(run_id, status="ok", counts=counts)
-        logger.info("poll cycle ok: %s", counts)
+        counts["failed_accounts"] = len(failures)
+        counts["skipped_accounts"] = skipped_accounts
+
+        if failures and counts["transactions"] == 0 and counts["trades"] == 0 and attempted_accounts == len(failures):
+            # Every attempted account failed — surface as a hard error.
+            status = "error"
+        elif failures:
+            status = "partial"
+        else:
+            status = "ok"
+
+        detail_msg: str | None
+        if failures:
+            head = "; ".join(failures[:5])
+            more = f" (+{len(failures) - 5} more)" if len(failures) > 5 else ""
+            detail_msg = f"{len(failures)} failure(s): {head}{more}"
+        else:
+            detail_msg = None
+
+        _finalise_run(run_id, status=status, counts=counts, detail=detail_msg)
+        logger.info("poll cycle %s: %s", status, counts)
         return counts
     except Exception as exc:
         _finalise_run(run_id, status="error", counts=counts, detail=repr(exc))

@@ -212,9 +212,16 @@ async function refreshPollStatus() {
         }
         const latest = runs[0];
         const ago = fmtRelative(latest.finished_at || latest.started_at);
-        const symbol = latest.status === 'ok' ? '✓' : latest.status === 'error' ? '✗' : '⟳';
-        el.textContent = `Last ${latest.kind}: ${ago} — ${symbol}`;
-        el.className = 'poll-status is-' + (latest.status === 'ok' ? 'ok' : latest.status === 'error' ? 'error' : 'running');
+        const symbol = ({ ok: '✓', error: '✗', partial: '⚠' })[latest.status] ?? '⟳';
+        const failed = latest.counts?.failed_accounts ?? 0;
+        const suffix = failed > 0 ? ` (${failed} account${failed === 1 ? '' : 's'} failed)` : '';
+        el.textContent = `Last ${latest.kind}: ${ago} — ${symbol}${suffix}`;
+        el.title = latest.detail || '';
+        el.className = 'poll-status is-' +
+            (latest.status === 'ok' ? 'ok'
+             : latest.status === 'error' ? 'error'
+             : latest.status === 'partial' ? 'running'
+             : 'running');
     } catch (e) {
         const el = $('#poll-status');
         el.textContent = 'Poll status unavailable';
