@@ -1,0 +1,252 @@
+"""Verbatim sample responses copied from Redbark's sample-responses page."""
+
+from __future__ import annotations
+
+CONNECTIONS_RESPONSE: dict[str, object] = {
+    "data": [
+        {
+            "id": "e8f1a2b3-7c4d-5e6f-8a9b-0c1d2e3f4a5b",
+            "provider": "snaptrade",
+            "category": "brokerage",
+            "institutionId": "a2c4d6e8-1357-9bdf-2468-ace013579bdf",
+            "institutionName": "Interactive Brokers",
+            "institutionLogo": "https://cdn.redbark.co/logos/ibkr.png",
+            "status": "active",
+            "lastRefreshedAt": "2026-04-23T03:00:00.000Z",
+            "createdAt": "2026-02-20T14:30:00.000Z",
+        },
+        {
+            "id": "b7c4a1e2-8d3f-4e9a-9c5b-1f2a3e4d5c6b",
+            "provider": "fiskil",
+            "category": "banking",
+            "institutionId": "77",
+            "institutionName": "Westpac",
+            "institutionLogo": "https://cdn.redbark.co/logos/westpac.png",
+            "status": "active",
+            "lastRefreshedAt": "2026-04-23T02:30:00.000Z",
+            "createdAt": "2026-01-15T10:00:00.000Z",
+        },
+    ]
+}
+
+ACCOUNTS_RESPONSE: dict[str, object] = {
+    "data": [
+        {
+            "id": "a1b2c3d4-e5f6-7890-a1b2-c3d4e5f67890",
+            "connectionId": "b7c4a1e2-8d3f-4e9a-9c5b-1f2a3e4d5c6b",
+            "provider": "fiskil",
+            "name": "Everyday Account",
+            "type": "transaction",
+            "institutionName": "Westpac",
+            "accountNumber": "xxxx4567",
+            "currency": "AUD",
+        },
+        {
+            "id": "c3d4e5f6-a7b8-9012-c3d4-e5f6a7b89012",
+            "connectionId": "b7c4a1e2-8d3f-4e9a-9c5b-1f2a3e4d5c6b",
+            "provider": "fiskil",
+            "name": "Low Rate Credit Card",
+            "type": "credit-card",
+            "institutionName": "Westpac",
+            "accountNumber": "xxxx1234",
+            "currency": "AUD",
+        },
+        {
+            "id": "b2c3d4e5-f6a7-8901-b2c3-d4e5f6a78901",
+            "connectionId": "b7c4a1e2-8d3f-4e9a-9c5b-1f2a3e4d5c6b",
+            "provider": "fiskil",
+            "name": "Savings Account",
+            "type": "savings",
+            "institutionName": "Westpac",
+            "accountNumber": "xxxx8901",
+            "currency": "AUD",
+        },
+        {
+            "id": "d4e5f6a7-b8c9-0123-d4e5-f6a7b8c90123",
+            "connectionId": "e8f1a2b3-7c4d-5e6f-8a9b-0c1d2e3f4a5b",
+            "provider": "snaptrade",
+            "name": "Trading Account",
+            "type": "investment",
+            "institutionName": "Interactive Brokers",
+            "accountNumber": "xxxx5566",
+            "currency": "USD",
+        },
+    ],
+    "pagination": {"total": 4, "limit": 50, "offset": 0, "hasMore": False},
+}
+
+BALANCES_RESPONSE: dict[str, object] = {
+    "data": [
+        {
+            "accountId": "a1b2c3d4-e5f6-7890-a1b2-c3d4e5f67890",
+            "currentBalance": "2345.67",
+            "availableBalance": "2345.67",
+            "currency": "AUD",
+        },
+        {
+            "accountId": "b2c3d4e5-f6a7-8901-b2c3-d4e5f6a78901",
+            "currentBalance": "18750.00",
+            "availableBalance": "18750.00",
+            "currency": "AUD",
+        },
+        {
+            "accountId": "c3d4e5f6-a7b8-9012-c3d4-e5f6a7b89012",
+            "currentBalance": "-842.15",
+            "availableBalance": "4157.85",
+            "currency": "aud",
+        },
+        {
+            "accountId": "d4e5f6a7-b8c9-0123-d4e5-f6a7b8c90123",
+            "currentBalance": None,
+            "availableBalance": None,
+            "currency": None,
+        },
+    ]
+}
+
+TRANSACTIONS_RESPONSE: dict[str, object] = {
+    "data": [
+        {
+            "id": "e4a7f91b2c3d4e5f6a7b8c9d",
+            "accountId": "a1b2c3d4-e5f6-7890-a1b2-c3d4e5f67890",
+            "accountName": "Everyday Account",
+            "status": "posted",
+            "date": "2026-04-22",
+            "datetime": "2026-04-21T23:14:00.000Z",
+            "description": "Woolworths Sydney CBD",
+            "amount": "-64.20",
+            "direction": "debit",
+            "category": "FOOD_AND_DRINK",
+            "merchantName": "Woolworths",
+            "merchantCategoryCode": "5411",
+        },
+        {
+            "id": "f5b8a02c3d4e5f6a7b8c9d0e",
+            "accountId": "a1b2c3d4-e5f6-7890-a1b2-c3d4e5f67890",
+            "accountName": "Everyday Account",
+            "status": "posted",
+            "date": "2026-04-21",
+            "datetime": None,
+            "description": "TFR FROM SAVINGS",
+            "amount": "500.00",
+            "direction": "credit",
+            "category": "TRANSFER_IN",
+            "merchantName": None,
+            "merchantCategoryCode": None,
+        },
+        {
+            "id": "b7d0c24e5f6a7b8c9d0e1f2a",
+            "accountId": "a1b2c3d4-e5f6-7890-a1b2-c3d4e5f67890",
+            "accountName": "Everyday Account",
+            "status": "posted",
+            "date": "2026-04-18",
+            "datetime": "2026-04-17T23:00:00.000Z",
+            "description": "ACME CORP SALARY",
+            "amount": "4250.00",
+            "direction": "credit",
+            "category": "INCOME",
+            "merchantName": None,
+            "merchantCategoryCode": None,
+        },
+        {
+            "id": "c8e1d35f6a7b8c9d0e1f2a3b",
+            "accountId": "c3d4e5f6-a7b8-9012-c3d4-e5f6a7b89012",
+            "accountName": "Low Rate Credit Card",
+            "status": "posted",
+            "date": "2026-04-15",
+            "datetime": "2026-04-14T22:45:00.000Z",
+            "description": "Qantas Airways 08129933412",
+            "amount": "-412.50",
+            "direction": "debit",
+            "category": "TRAVEL",
+            "merchantName": "Qantas",
+            "merchantCategoryCode": "4511",
+        },
+        {
+            "id": "d9f2e46a7b8c9d0e1f2a3b4c",
+            "accountId": "c3d4e5f6-a7b8-9012-c3d4-e5f6a7b89012",
+            "accountName": "Low Rate Credit Card",
+            "status": "posted",
+            "date": "2026-04-12",
+            "datetime": "2026-04-12T04:15:00.000Z",
+            "description": "Netflix.com",
+            "amount": "-22.99",
+            "direction": "debit",
+            "category": "ENTERTAINMENT",
+            "merchantName": "Netflix",
+            "merchantCategoryCode": "4899",
+        },
+        {
+            "id": "e0a3f57b8c9d0e1f2a3b4c5d",
+            "accountId": "b2c3d4e5-f6a7-8901-b2c3-d4e5f6a78901",
+            "accountName": "Savings Account",
+            "status": "posted",
+            "date": "2026-04-01",
+            "datetime": "2026-04-01T00:01:00.000Z",
+            "description": "INTEREST CREDIT",
+            "amount": "62.18",
+            "direction": "credit",
+            "category": "INCOME",
+            "merchantName": None,
+            "merchantCategoryCode": None,
+        },
+    ],
+    "pagination": {"total": 6, "limit": 200, "offset": 0, "hasMore": False},
+}
+
+TRADES_RESPONSE: dict[str, object] = {
+    "data": [
+        {
+            "id": "2026-04-15-VOO-BUY-4652-10-2026-04-17-1-",
+            "accountId": "d4e5f6a7-b8c9-0123-d4e5-f6a7b8c90123",
+            "accountName": "Trading Account",
+            "symbol": "VOO",
+            "name": "Vanguard S&P 500 ETF",
+            "type": "buy",
+            "quantity": "10",
+            "price": "465.2",
+            "currency": "usd",
+            "totalAmount": "4652",
+            "fees": "1",
+            "tradeDate": "2026-04-15",
+            "settlementDate": "2026-04-17",
+            "description": None,
+        },
+        {
+            "id": "2026-03-28-AAPL-SELL-964-5-2026-04-01-1-",
+            "accountId": "d4e5f6a7-b8c9-0123-d4e5-f6a7b8c90123",
+            "accountName": "Trading Account",
+            "symbol": "AAPL",
+            "name": "Apple Inc.",
+            "type": "sell",
+            "quantity": "5",
+            "price": "192.8",
+            "currency": "usd",
+            "totalAmount": "964",
+            "fees": "1",
+            "tradeDate": "2026-03-28",
+            "settlementDate": "2026-04-01",
+            "description": None,
+        },
+    ],
+    "pagination": {"total": 2, "limit": 200, "offset": 0, "hasMore": False},
+}
+
+HOLDINGS_RESPONSE: dict[str, object] = {
+    "data": [
+        {
+            "id": "abc123def456ghi789jkl012",
+            "accountId": "d4e5f6a7-b8c9-0123-d4e5-f6a7b8c90123",
+            "accountName": "Trading Account",
+            "symbol": "VOO",
+            "name": "Vanguard S&P 500 ETF",
+            "exchange": "NYSEARCA",
+            "currency": "USD",
+            "quantity": "40.0000",
+            "averagePrice": "412.80",
+            "currentPrice": "468.15",
+            "marketValue": "18726.00",
+            "unrealizedPnl": "2214.00",
+        },
+    ]
+}
