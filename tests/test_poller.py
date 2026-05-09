@@ -1,0 +1,202 @@
+from __future__ import annotations
+
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
+from pathlib import Path
+from typing import Any
+
+import httpx
+from sqlmodel import select
+
+from app.db import session_scope
+from app.models import Account, BalanceSnapshot, Connection, SyncRun, Trade, Transaction
+from app.poller import run_once
+from tests.conftest import make_mock_client
+from tests.fixtures import (
+    ACCOUNTS_RESPONSE,
+    BALANCES_RESPONSE,
+    CONNECTIONS_RESPONSE,
+    TRADES_RESPONSE,
+    TRANSACTIONS_RESPONSE,
+)
+
+
+def _build_handler(transactions_capture: list[dict[str, str]] | None = None) -> Any:
+    """Handler that returns Redbark sample fixtures by path."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        params = dict(request.url.params)
+        if path == "/v1/connections":
+            return httpx.Response(200, json=CONNECTIONS_RESPONSE)
+        if path == "/v1/accounts":
+            return httpx.Response(200, json=ACCOUNTS_RESPONSE)
+        if path == "/v1/balances":
+            # Echo only the ids requested.
+            ids = set(params.get("accountIds", "").split(","))
+            data = [
+                row
+                for row in BALANCES_RESPONSE["data"]  # type: ignore[union-attr]
+                if row["accountId"] in ids
+            ]
+            return httpx.Response(200, json={"data": data})
+        if path == "/v1/transactions":
+            if transactions_capture is not None:
+                transactions_capture.append(params)
+            account_id = params.get("accountId")
+            data = [
+                tx
+                for tx in TRANSACTIONS_RESPONSE["data"]  # type: ignore[union-attr]
+                if tx["accountId"] == account_id
+            ]
+            return httpx.Response(
+                200,
+                json={
+                    "data": data,
+                    "pagination": {
+                        "total": len(data),
+                        "limit": 500,
+                        "offset": 0,
+                        "hasMore": False,
+                    },
+                },
+            )
+        if path == "/v1/trades":
+            account_id = params.get("accountId")
+            data = [
+                tr
+                for tr in TRADES_RESPONSE["data"]  # type: ignore[union-attr]
+                if tr["accountId"] == account_id
+            ]
+            return httpx.Response(
+                200,
+                json={
+                    "data": data,
+                    "pagination": {
+                        "total": len(data),
+                        "limit": 500,
+                        "offset": 0,
+                        "hasMore": False,
+                    },
+                },
+            )
+        return httpx.Response(404, json={"message": f"unmocked path {path}"})
+
+    return handler
+
+
+async def test_run_once_populates_all_entities_and_sets_watermarks(temp_db: Path) -> None:
+    handler = _build_handler()
+    client, _http = make_mock_client(handler)
+    counts = await run_once(client)
+    await client.aclose()
+
+    assert counts == {
+        "connections": 2,
+        "accounts": 4,
+        "balances": 4,
+        "transactions": 6,
+        "trades": 2,
+    }
+
+    with session_scope() as session:
+        # Connections + accounts upserted.
+        connections = session.exec(select(Connection)).all()
+        accounts = session.exec(select(Account)).all()
+        assert {c.id for c in connections} == {
+            "e8f1a2b3-7c4d-5e6f-8a9b-0c1d2e3f4a5b",
+            "b7c4a1e2-8d3f-4e9a-9c5b-1f2a3e4d5c6b",
+        }
+        assert len(accounts) == 4
+
+        # Watermarks bumped on every account.
+        for a in accounts:
+            assert a.last_polled_transactions_at is not None
+
+        # Trades watermark only set for the brokerage investment account.
+        wm_trades = {a.id: a.last_polled_trades_at for a in accounts}
+        investment_id = "d4e5f6a7-b8c9-0123-d4e5-f6a7b8c90123"
+        assert wm_trades[investment_id] is not None
+        assert all(
+            wm_trades[aid] is None for aid in wm_trades if aid != investment_id
+        ), "trades should only be polled for investment accounts on brokerage connections"
+
+        # Balance snapshots are append-only; null fields stored as NULL.
+        snaps = session.exec(select(BalanceSnapshot)).all()
+        assert len(snaps) == 4
+        null_snap = next(
+            s for s in snaps if s.account_id == "d4e5f6a7-b8c9-0123-d4e5-f6a7b8c90123"
+        )
+        assert null_snap.current_balance is None
+        assert null_snap.available_balance is None
+        assert null_snap.currency is None
+
+        # Transactions persisted with Decimal amounts.
+        txs = session.exec(select(Transaction)).all()
+        assert len(txs) == 6
+        woolies = next(t for t in txs if t.merchant_name == "Woolworths")
+        assert woolies.amount == Decimal("-64.20")
+        assert woolies.direction == "debit"
+        assert woolies.category == "FOOD_AND_DRINK"
+
+        # Trades persisted only for the investment account.
+        trades = session.exec(select(Trade)).all()
+        assert len(trades) == 2
+        assert all(t.account_id == investment_id for t in trades)
+
+        # SyncRun recorded ok.
+        runs = session.exec(select(SyncRun)).all()
+        assert len(runs) == 1
+        assert runs[0].status == "ok"
+        assert runs[0].counts == counts
+
+
+async def test_second_poll_uses_watermark_minus_24h(temp_db: Path) -> None:
+    """After the first cycle sets watermarks, the next cycle should request
+    `from = watermark - 24h` for transactions and trades."""
+    # First cycle.
+    handler1 = _build_handler()
+    client1, _http1 = make_mock_client(handler1)
+    await run_once(client1)
+    await client1.aclose()
+
+    # Capture the second cycle's `from` params on /v1/transactions.
+    captured: list[dict[str, str]] = []
+    handler2 = _build_handler(transactions_capture=captured)
+    client2, _http2 = make_mock_client(handler2)
+    await run_once(client2)
+    await client2.aclose()
+
+    # Each account should have a `from` ~ 24h ago (give or take a few seconds).
+    assert len(captured) >= 1
+    now = datetime.now(UTC)
+    for params in captured:
+        assert "from" in params, f"missing from in {params}"
+        # Strip the trailing 'Z' or +00:00 — fromisoformat handles both in py3.12.
+        from_dt = datetime.fromisoformat(params["from"])
+        if from_dt.tzinfo is None:
+            from_dt = from_dt.replace(tzinfo=UTC)
+        delta = now - from_dt
+        # Should be approximately 24h ago — anywhere between 23h and 25h.
+        assert timedelta(hours=23) < delta < timedelta(hours=25), (
+            f"expected ~24h overlap, got {delta}"
+        )
+
+
+async def test_run_once_records_error_on_failure(temp_db: Path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, json={"message": "boom"})
+
+    client, _http = make_mock_client(handler)
+    try:
+        await run_once(client)
+    except Exception:
+        pass
+    finally:
+        await client.aclose()
+
+    with session_scope() as session:
+        runs = session.exec(select(SyncRun)).all()
+        assert len(runs) == 1
+        assert runs[0].status == "error"
+        assert runs[0].detail is not None
