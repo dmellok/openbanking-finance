@@ -15,7 +15,7 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator, Iterable, Sequence
 from contextlib import asynccontextmanager
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from types import TracebackType
 from typing import Any
 
@@ -340,6 +340,10 @@ def _chunks(seq: Sequence[str], size: int) -> Iterable[list[str]]:
 
 def _format_dt(value: date | datetime | str) -> str:
     if isinstance(value, datetime):
+        # Fiskil rejects naive datetimes as non-RFC3339. We only ever write UTC
+        # watermarks, but SQLite roundtrips strip tzinfo — re-attach on the way out.
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=UTC)
         return value.isoformat()
     if isinstance(value, date):
         return value.isoformat()

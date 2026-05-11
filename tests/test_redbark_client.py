@@ -227,3 +227,28 @@ async def test_4xx_other_than_429_raises() -> None:
         with pytest.raises(RedbarkAPIError) as exc_info:
             await client.list_connections()
     assert exc_info.value.status_code == 404
+
+
+async def test_list_transactions_naive_from_is_serialised_as_utc() -> None:
+    # Regression: SQLite roundtrip strips tzinfo from watermarks. Fiskil rejects
+    # naive datetimes as non-RFC3339, which Redbark surfaces as a generic 503.
+    from datetime import datetime
+
+    captured: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["from"] = request.url.params.get("from", "")
+        return httpx.Response(
+            200,
+            json={"data": [], "pagination": {"total": 0, "limit": 500, "offset": 0, "hasMore": False}},
+        )
+
+    async with _build_client(handler) as client:
+        async for _ in client.list_transactions(
+            connection_id="c1",
+            account_id="a1",
+            from_=datetime(2026, 5, 9, 23, 35, 19, 805700),  # naive
+        ):
+            pass
+
+    assert captured["from"].endswith("+00:00")
