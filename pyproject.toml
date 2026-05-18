@@ -71,3 +71,8 @@ asyncio_mode = "auto"
 filterwarnings = [
     "ignore::DeprecationWarning:apscheduler.*",
 ]
+
+[dependency-groups]
+dev = [
+    "playwright>=1.59.0",
+]

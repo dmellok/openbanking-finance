@@ -1,6 +1,21 @@
 # pyFinance v2
 
-Personal finance dashboard built on top of [Redbark](https://docs.redbark.co/) — an Australian open-banking + brokerage sync service. FastAPI serves both a REST JSON API and a static dashboard; APScheduler polls Redbark every 15 minutes; SQLite (via SQLModel) is the local store. There are no webhooks — Redbark does not store financial data long-term, so the local database is the source of truth.
+Self-hosted personal finance dashboard for Australian bank and brokerage accounts. Syncs via [Redbark](https://docs.redbark.co/) (open-banking + brokerage), stores everything in a local SQLite database, and renders six tabs of charts — spending, net worth, cash flow, insights, trends, and a financial-independence forecast. One process, no build step, no third party sees your data after the sync hop.
+
+![Insights tab](docs/screenshots/dark/insights.png)
+
+## Screenshots
+
+All six tabs, captured against a generated demo dataset (see [`scripts/seed_demo.py`](scripts/seed_demo.py)). Dark and light themes are both supported.
+
+| Tab | Preview |
+| --- | --- |
+| **Spending** — by-category, top merchants, scrollable transaction log | ![Spending](docs/screenshots/dark/spending.png) |
+| **Net worth** — total + per-account, balance snapshots over time | ![Net worth](docs/screenshots/dark/networth.png) |
+| **Cash flow** — monthly income vs spend, budget editor | ![Cash flow](docs/screenshots/dark/cashflow.png) |
+| **Insights** — calendar heatmap, income→category sankey, treemap, day-of-week × hour heatmap | ![Insights](docs/screenshots/dark/insights.png) |
+| **Trends** — rolling 30-day spend, monthly category mix, day-of-month | ![Trends](docs/screenshots/dark/trends.png) |
+| **Forecast** — net-worth projection and FI calculator | ![Forecast](docs/screenshots/dark/forecast.png) |
 
 ## Stack
 
@@ -77,3 +92,18 @@ make lint        # ruff check
 
 - Single-user, single-machine. No auth on the dashboard.
 - SQLite — fine for one user, not suitable for multi-tenant.
+
+## Demo data + screenshots
+
+The screenshots above come from a generated dataset, not real bank data. To regenerate:
+
+```bash
+# Seed a fresh demo.db (~14 months of plausible transactions, balances, trades)
+DATABASE_URL=sqlite:///./demo.db PYTHONPATH=. uv run python scripts/seed_demo.py
+
+# Serve the dashboard against demo.db with the poller disabled
+PYTHONPATH=. uv run python scripts/serve_demo.py    # → http://127.0.0.1:8765/
+
+# Capture all six tabs in both themes via Playwright + system Chrome
+PYTHONPATH=. uv run python scripts/capture_screenshots.py
+```
