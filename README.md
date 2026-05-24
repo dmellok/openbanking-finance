@@ -1,4 +1,4 @@
-# pyFinance v2
+# OpenBanking Finance v2
 
 Self-hosted personal finance dashboard for Australian bank and brokerage accounts. Syncs via [Redbark](https://docs.redbark.co/) (open-banking + brokerage), stores everything in a local SQLite database, and renders six tabs of charts — spending, net worth, cash flow, insights, trends, and a financial-independence forecast. One process, no build step, no third party sees your data after the sync hop.
 
